@@ -4148,8 +4148,16 @@ async def job_whatsapp_inbound_poll(app):
                     db.resolve_pending_context(sender_number, ticket_ref)
                 continue  # Donna handled it, no Talha ping
 
-            # ── STEP 5: No ticket context — use full conversational AI for team members ──
+            # ── STEP 5: No ticket context — skip if webhook already handled this ──
             if not ticket_ref:
+                import hashlib as _hlib2
+                _ts2 = datetime.now(timezone.utc).strftime('%Y%m%d%H%M')
+                _dk = 'wh_' + _hlib2.md5(f'{sender_number}:{content_raw}:{_ts2}'.encode()).hexdigest()[:16]
+                _prev_ts = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime('%Y%m%d%H%M')
+                _dk2 = 'wh_' + _hlib2.md5(f'{sender_number}:{content_raw}:{_prev_ts}'.encode()).hexdigest()[:16]
+                if db.is_wa_message_processed(_dk) or db.is_wa_message_processed(_dk2):
+                    log.debug('Poll: skipping message already handled by webhook for %s', sender_name)
+                    continue
                 try:
                     reply = await ask_claude_team_conversational(sender_number, sender_name, content_raw)
                     if reply:
@@ -5196,11 +5204,19 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
             )
         else:
             # Team member — conversational AI mode
-            # Log inbound to team_conversations so UI shows it
-            db.log_team_conversation(
+            # Log inbound to team_conversations with content+minute hash for dedup
+            import hashlib as _hlib
+            _ts_min = datetime.now(timezone.utc).strftime('%Y%m%d%H%M')
+            _dedup_key = 'wh_' + _hlib.md5(
+                f'{sender}:{message}:{_ts_min}'.encode()
+            ).hexdigest()[:16]
+            logged = db.log_team_conversation(
                 sender_name, sender, 'inbound', message,
-                wa_message_name=None,
+                wa_message_name=_dedup_key,
             )
+            if not logged:
+                log.debug('Webhook: team message already processed for %s', sender_name)
+                return
             db.update_wa_window(sender, 'inbound')
 
             # Send any queued message now that window is open
@@ -5283,18 +5299,6 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="ok")
 
     sender_name = whitelist[sender]
-
-    # Check access level — team members are handled by the poll job (has dedup).
-    # Only process admin messages via webhook to avoid double-processing.
-    sender_access = next(
-        (w.get('access', 'team') for w in CONFIG.get('communication', {}).get('whatsapp_whitelist', [])
-         if w['number'] == sender),
-        'team'
-    )
-    if sender_access == 'team':
-        # Team members handled by job_whatsapp_inbound_poll — skip webhook to avoid double reply
-        log.debug('Webhook: skipping team member %s — handled by poll job', sender_name)
-        return web.Response(status=200, text='ok')
 
     # Fire and forget — schedule on the main event loop (aiohttp runs in it)
     asyncio.get_event_loop().create_task(_process_whatsapp_message(sender, sender_name, message))

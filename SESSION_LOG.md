@@ -551,3 +551,28 @@ since `ask_claude_team_conversational` only uses `sender_number` and `sender_nam
 
 **Result:** All team member WhatsApp messages — whether received via webhook (instant) or
 poll (2 min) — now get full conversational Claude Haiku responses with conversation history.
+
+---
+
+## Session: 2026-04-23 (continued) — Instant team replies via webhook
+
+**Root cause:** Webhook handler had an early-return for team members (`access == 'team'`)
+added in the Bug 1 fix session. This meant all team messages waited for the 2-min poll
+cycle instead of getting instant replies. The early-return was added to prevent double
+replies, but we now handle that with proper hash-based dedup instead.
+
+**Fix 1 — Removed early-return:** `handle_whatsapp_webhook` no longer skips team members.
+All whitelisted numbers (admin + team) go through `_process_whatsapp_message`.
+
+**Fix 2 — Hash dedup in webhook:** When the webhook logs the inbound to `team_conversations`,
+it generates a dedup key: `wh_` + MD5(`sender:message:YYYYMMDDHHMM`)[:16]. If
+`log_team_conversation` returns `False` (unique constraint hit), returns immediately —
+message was already processed.
+
+**Fix 3 — Hash dedup in poll:** STEP 5 in `job_whatsapp_inbound_poll` computes the same
+hash for the current minute AND the previous minute (covers poll arriving 1+ min after
+webhook). If either hash key is already in `team_conversations`, the poll skips the AI
+call entirely and continues.
+
+**Verified:** Test webhook call → `WhatsApp in from Abdul Malik` logged at 15:21:42,
+`WhatsApp reply sent` at 15:21:45 — **3 seconds end-to-end**.
