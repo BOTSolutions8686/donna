@@ -397,3 +397,50 @@ escalation_check(5min)
 - Test escalation auto-ticket creation (temporarily reduce timeout to 1 min)
 - Wire handle_customer_message for queued messages (window closed → template → queue)
 - Client profiles nightly sync (schema ready in DB)
+
+---
+
+## Session: 2026-04-23
+
+**Goal:** Set up proper project structure, auth system, team message routing fix, GitHub prep.
+
+**Completed:**
+
+### FIX 1 — Abdul Malik / Team Message Routing
+- Added `normalize_phone(phone)` function (strips spaces/dashes, ensures + prefix)
+- Poll handler whitelist now uses `normalize_phone()` for consistent lookup
+- Replaced "I didn't catch which ticket" fallback with `handle_team_message()` call
+- General team messages now get intelligent responses instead of ticket confusion
+
+### FIX 2 — Real ERPNext Authentication
+- Added `sessions` table to cloud_agent.db
+- `create_session()`, `get_session()`, `delete_session()` helpers in database.py
+- `POST /api/auth/login` — calls ERPNext login API, issues Bearer token
+- `GET /api/auth/me` — returns current user (username, role)
+- `POST /api/auth/logout-token` — invalidates session
+
+### FIX 3 — Frontend Login Wired
+- `fetchApi` replaced by `authFetch` (adds `Authorization: Bearer <token>`)
+- Login form hits `/api/auth/login`, stores `{name, token, role}` in localStorage
+- Token verified via `/api/auth/me` on app load, shows Loading… until checked
+- Both logout buttons call server to invalidate session
+
+### FIX 4 — Role-Aware UI
+- Financial and System tool sections marked `adminOnly: true`
+- Team role users only see Operations and Communication tools
+
+### FIX 5 — Config Update
+- Added `admin_users: ["talha@botsolutions.tech", "Administrator"]` to config.py
+
+### Project Structure
+- `logs/` directory with rotating file handlers (app.log, error.log, whatsapp.log)
+- `docs/ARCHITECTURE.md` — full message flow + DB schema docs
+- `docs/KNOWN_ISSUES.md` — open issues and technical debt tracker
+- `README.md` — project overview and operations guide
+- `config.example.json` — template for new deployments
+- `.gitignore` — excludes config.py, *.db, logs/, *.bak
+- Git repo initialized, initial commit (13 files, 10815 lines)
+
+**Service status:** Running — `systemctl is-active cloud_agent` = active
+
+**Next:** Add GitHub remote (need repo URL from Talha) and push

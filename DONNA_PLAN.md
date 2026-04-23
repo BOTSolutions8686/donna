@@ -294,3 +294,40 @@ escalation_check(5min)
 - Escalation auto-ticket test (1-min timeout for testing)
 - Contact name enrichment from ERPNext Customer doctype
 - Template-based re-open flow for customers (window closed)
+
+---
+
+## STANDING RULES (added 2026-04-23)
+
+**RULE: GitHub is the source of truth.**
+Every session must end with:
+```
+cd /opt/cloud_agent
+git add .
+git commit -m "Session: <what was built/fixed>"
+git push origin main
+```
+Never commit: config.py, cloud_agent.db, logs/, *.bak files.
+
+---
+
+## Session: 2026-04-23 — Auth, Team Routing, Project Structure
+
+### Completed this session
+- [x] FIX 1: normalize_phone() + team messages routed to handle_team_message() (no more "which ticket?" for general messages)
+- [x] FIX 2: sessions table in DB + /api/auth/login, /api/auth/me, /api/auth/logout-token endpoints (real ERPNext auth)
+- [x] FIX 3: Frontend login wired to /api/auth/login, Bearer token in authFetch, token verified on app load
+- [x] FIX 4: Role-aware UI — Financial + System tools hidden from team role
+- [x] FIX 5: admin_users added to config.py
+- [x] Rotating file logs: logs/app.log, logs/error.log, logs/whatsapp.log
+- [x] wa_log.info() in handle_team_message and handle_customer_message entry points
+- [x] README.md, docs/ARCHITECTURE.md, docs/KNOWN_ISSUES.md, config.example.json
+- [x] .gitignore set up (excludes config.py, *.db, logs/, *.bak)
+- [x] Git repo initialized, initial commit: 13 files, 10815 lines
+
+### Pending - next session
+- [ ] Add GitHub remote and push (need GitHub repo URL from Talha)
+- [ ] Test login flow end-to-end with real ERPNext credentials
+- [ ] Verify Abdul Malik messages now route correctly in production
+- [ ] Monitor whatsapp.log for real traffic
+- [ ] Clean up *.bak files after confirming stability
