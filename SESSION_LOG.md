@@ -493,3 +493,23 @@ Customer intervene send was POSTing to both:
 **Fix:** Removed the second `log-human-message` fetch from the intervene send flow.
 The `send-whatsapp` endpoint's `intervention:true` path is sufficient — it logs
 to `customer_conversations` via `db.log_customer_conversation()`.
+
+---
+
+## Session: 2026-04-23 (continued) — Live team panel + chat persistence
+
+### FIX 1: Team panel loads from API (all 15 members)
+- Replaced hardcoded `TEAM` constant (2 members) with `TEAM_STATIC` (fallback only)
+- Added `liveTeam` + `teamIdMap` state initialised from `TEAM_STATIC`
+- New `useEffect` polls `/api/team/members` on mount and every 60s
+- Builds `id` from `name.toLowerCase().replace(/\s+/g,'')` — e.g. Abdul Malik → `abdulmalik`
+- Builds `teamIdMap` dynamically so team conversation poll works for all members
+- `Sidebar` now receives `liveTeam` prop and renders all live members
+- `isTeamThread` and `activeMember` now use live `teamIdMap` / `liveTeam`
+- `/api/team/members` verified: returns all 15 members, `last_message` populated from `team_conversations` fallback
+
+### FIX 2: Chat history persists within browser session
+- `threads` state now initialises from `sessionStorage.getItem('donna-threads')` if present
+- `addMessage` callback writes updated threads to `sessionStorage` on every message
+- Survives page refresh within same browser session; cleared when tab is closed
+- Only restores if `donna.length > 1` (skips the hardcoded welcome message)

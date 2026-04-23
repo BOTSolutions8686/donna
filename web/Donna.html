@@ -113,11 +113,10 @@ async function authFetch(path,opts={}){
 const fetchApi=authFetch;
 
 // ─── STATIC DATA ──────────────────────────────────────────────────────────────
-const TEAM=[
+const TEAM_STATIC=[
   {id:'talha',  name:'Talha',      role:'Project Lead',   status:'online',avatar:'T',whatsapp:'+966546065347'},
   {id:'albaraa',name:'Al Baraa',   role:'Implementation', status:'away',  avatar:'A',whatsapp:'+966544272725'},
 ];
-const TEAM_ID_MAP={'talha':'Talha','albaraa':'Al Baraa'};
 
 const TOOLS=[
   {section:'Financial',adminOnly:true,items:[
@@ -425,7 +424,7 @@ function CustomerCard({customer,active,onClick,unreadCount}){
 }
 
 // ─── SIDEBAR ─────────────────────────────────────────────────────────────────
-function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts}){
+function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam}){
   return <div className="sidebar" id="sidebar-el">
     <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
       <div style={{display:'flex',alignItems:'center',gap:9}}>
@@ -461,7 +460,7 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
       {/* Team */}
       <div style={{padding:'8px 8px 4px'}}>
         <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 5px'}}>Team</div>
-        {TEAM.map(m=><MemberCard key={m.id} member={m} active={activeThread===m.id} onClick={()=>{setActiveThread(m.id);onClose();}}/>)}
+        {liveTeam.map(m=><MemberCard key={m.id} member={m} active={activeThread===m.id} onClick={()=>{setActiveThread(m.id);onClose();}}/>)}
       </div>
 
       {/* Customers */}
@@ -561,7 +560,13 @@ function App(){
   },[]);
   const [isDark,setIsDark]=useState(()=>localStorage.getItem('donna-theme')!=='light');
   const [activeThread,setActiveThread]=useState('donna');
-  const [threads,setThreads]=useState(makeInitialThreads);
+  const [threads,setThreads]=useState(()=>{
+    try{
+      const saved=sessionStorage.getItem('donna-threads');
+      if(saved){const parsed=JSON.parse(saved);if(parsed&&parsed.donna&&parsed.donna.length>1)return parsed;}
+    }catch(e){}
+    return makeInitialThreads();
+  });
   const [input,setInput]=useState('');
   const [typing,setTyping]=useState(false);
   const [activeTool,setActiveTool]=useState(null);
@@ -569,6 +574,8 @@ function App(){
   const [customerFilter,setCustomerFilter]=useState('all');
   const [statusData,setStatusData]=useState({donna_active:true,last_sync:'—',alerts:0,production_url:''});
   const [liveCustomers,setLiveCustomers]=useState([]);
+  const [liveTeam,setLiveTeam]=useState(TEAM_STATIC);
+  const [teamIdMap,setTeamIdMap]=useState({'talha':'Talha','albaraa':'Al Baraa'});
   const [escalations,setEscalations]=useState([]);
   const [liveCustomerMsgs,setLiveCustomerMsgs]=useState([]);
   const [unreadCounts,setUnreadCounts]=useState({});
@@ -591,6 +598,31 @@ function App(){
     const load=()=>fetchApi('/api/status').then(d=>setStatusData(d)).catch(()=>{});
     load();
     const id=setInterval(load,60000);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // Team members poll (60s interval)
+  useEffect(()=>{
+    const loadTeam=()=>{
+      fetchApi('/api/team/members').then(d=>{
+        if(d&&d.members&&d.members.length>0){
+          const members=d.members.map(m=>({
+            id:(m.name||'').toLowerCase().replace(/\s+/g,''),
+            name:m.name,
+            role:m.role||'Team',
+            status:m.window_active?'online':'away',
+            avatar:(m.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase(),
+            whatsapp:m.whatsapp||'',
+          }));
+          setLiveTeam(members);
+          const idMap={};
+          members.forEach(m=>{idMap[m.id]=m.name;});
+          setTeamIdMap(idMap);
+        }
+      }).catch(()=>{});
+    };
+    loadTeam();
+    const id=setInterval(loadTeam,60000);
     return ()=>clearInterval(id);
   },[]);
 
@@ -642,8 +674,8 @@ function App(){
 
   // Active team conversation poll (10s interval)
   useEffect(()=>{
-    if(!activeThread||!TEAM_ID_MAP[activeThread])return;
-    const memberName=TEAM_ID_MAP[activeThread];
+    if(!activeThread||!teamIdMap[activeThread])return;
+    const memberName=teamIdMap[activeThread];
     const load=()=>{
       authFetch(`/api/team/conversations/${encodeURIComponent(memberName)}`)
         .then(d=>{
@@ -668,12 +700,16 @@ function App(){
   const handleLogin=user=>{localStorage.setItem('donna-user',JSON.stringify(user));setLoggedIn(user);};
   const nowStr=()=>new Date(Date.now()+3*3600000).toISOString().slice(11,16);
   const addMessage=useCallback((threadId,msg)=>{
-    setThreads(prev=>({...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]}));
+    setThreads(prev=>{
+      const updated={...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]};
+      try{sessionStorage.setItem('donna-threads',JSON.stringify(updated));}catch(e){}
+      return updated;
+    });
   },[]);
 
-  const isTeamThread=!!TEAM_ID_MAP[activeThread];
+  const isTeamThread=!!teamIdMap[activeThread];
   const isCustomerThread=liveCustomers.some(c=>c.id===activeThread);
-  const activeMember=TEAM.find(m=>m.id===activeThread);
+  const activeMember=liveTeam.find(m=>m.id===activeThread);
   const activeCustomer=liveCustomers.find(c=>c.id===activeThread);
   const showReadOnly=(isTeamThread||isCustomerThread)&&!intervening;
 
@@ -751,7 +787,7 @@ function App(){
 
   const prodUrl=(statusData.production_url||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'')||'helpdesk.botsolutions.tech';
 
-  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts};
+  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam};
 
   if(!authChecked)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'var(--bg0)',color:'var(--text-3)',fontSize:13}}>Loading…</div>;
   if(!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
