@@ -444,3 +444,23 @@ escalation_check(5min)
 **Service status:** Running — `systemctl is-active cloud_agent` = active
 
 **Next:** Add GitHub remote (need repo URL from Talha) and push
+
+---
+
+## Session: 2026-04-23 (continued) — Webhook path team_conversations logging
+
+**Fix:** `_process_whatsapp_message()` (webhook handler path) was not logging team
+member inbound messages or outbound replies to `team_conversations`. This meant
+messages from Al Baraa, Abdul Malik, and others sent via webhook (not the poll
+handler) never appeared in the dashboard UI team conversation view.
+
+**Changes to `cloud_agent.py` `_process_whatsapp_message()` team `else:` branch:**
+- Added `db.log_team_conversation(..., 'inbound', ...)` immediately after routing to team path
+- Added `db.update_wa_window(sender, 'inbound')` to track 24h window
+- Changed `erp.send_whatsapp()` to capture return value (`result`)
+- Added `db.log_team_conversation(..., 'outbound', ...)` after sending reply
+- Added `db.update_wa_window(sender, 'outbound')` after sending reply
+
+**Root cause:** The poll path (`job_whatsapp_inbound_poll`) was already logging
+correctly, but the webhook path (`_process_whatsapp_message`) was only logging to
+`communication_log` — not to `team_conversations` which the UI reads.

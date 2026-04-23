@@ -5146,6 +5146,13 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
                 # Build a basic member dict from whitelist entry
                 member = {"name": sender_name, "whatsapp": sender, "role": "Team", "works_on": ""}
 
+            # Log inbound to team_conversations so UI shows it
+            db.log_team_conversation(
+                sender_name, sender, 'inbound', message,
+                wa_message_name=None,
+            )
+            db.update_wa_window(sender, 'inbound')
+
             # Check for queued message (was queued because 24h window was closed)
             pending = db.get_pending_state(sender)
             if pending and pending.get("action") == "queued_message" and pending.get("context"):
@@ -5158,12 +5165,20 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
             reply = await handle_team_message(sender, sender_name, message, wa_name=None)
 
         if reply:
-            erp.send_whatsapp(sender, reply)
+            result = erp.send_whatsapp(sender, reply)
+            sent_name = result.get('name') if isinstance(result, dict) else None
             db.log_communication(
                 "whatsapp_reply", sender_name, sender,
                 message_preview=reply, status="sent",
                 reference_doctype="WhatsApp Message",
             )
+            # Also log outbound to team_conversations so UI shows reply
+            db.log_team_conversation(
+                sender_name, sender, 'outbound', reply,
+                sent_wa_message_name=sent_name,
+                delivery_status='sent',
+            )
+            db.update_wa_window(sender, 'outbound')
             log.info("WhatsApp reply sent to %s: %s", sender_name, reply[:80])
     except Exception as e:
         log.error("WhatsApp processing failed for %s: %s", sender, e, exc_info=True)
