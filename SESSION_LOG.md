@@ -537,3 +537,17 @@ to `customer_conversations` via `db.log_customer_conversation()`.
 - When count unchanged, preserves current thread state (keeps optimistic intervene messages)
 - When count increases, appends local `asHuman` messages not yet reflected in API
 - Poll dependency array updated to `[activeThread, teamIdMap]`
+
+---
+
+## Session: 2026-04-23 (continued) — Webhook path conversational AI for team
+
+**Fix:** `_process_whatsapp_message()` webhook path was still calling `handle_team_message()`
+(ticket-only, returns "I can only help with tickets"). Now calls `ask_claude_team_conversational()`
+instead — same as the poll path. Both paths now give instant, natural conversational replies.
+
+**Also removed:** unused `member = _TEAM_LOOKUP.get(sender)` / fallback dict — not needed
+since `ask_claude_team_conversational` only uses `sender_number` and `sender_name`.
+
+**Result:** All team member WhatsApp messages — whether received via webhook (instant) or
+poll (2 min) — now get full conversational Claude Haiku responses with conversation history.

@@ -5195,12 +5195,7 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
                 sender_name=sender_name,
             )
         else:
-            # Team member — terse Chief of Staff mode
-            member = _TEAM_LOOKUP.get(sender)
-            if not member:
-                # Build a basic member dict from whitelist entry
-                member = {"name": sender_name, "whatsapp": sender, "role": "Team", "works_on": ""}
-
+            # Team member — conversational AI mode
             # Log inbound to team_conversations so UI shows it
             db.log_team_conversation(
                 sender_name, sender, 'inbound', message,
@@ -5208,7 +5203,7 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
             )
             db.update_wa_window(sender, 'inbound')
 
-            # Check for queued message (was queued because 24h window was closed)
+            # Send any queued message now that window is open
             pending = db.get_pending_state(sender)
             if pending and pending.get("action") == "queued_message" and pending.get("context"):
                 queued_msg = pending["context"]
@@ -5217,7 +5212,7 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
                 erp.send_whatsapp(sender, queued_msg)
                 db.log_team_interaction(sender_name, sender, "outbound", queued_msg)
 
-            reply = await handle_team_message(sender, sender_name, message, wa_name=None)
+            reply = await ask_claude_team_conversational(sender, sender_name, message)
 
         if reply:
             result = erp.send_whatsapp(sender, reply)
