@@ -5234,6 +5234,18 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
     sender_name = whitelist[sender]
 
+    # Check access level — team members are handled by the poll job (has dedup).
+    # Only process admin messages via webhook to avoid double-processing.
+    sender_access = next(
+        (w.get('access', 'team') for w in CONFIG.get('communication', {}).get('whatsapp_whitelist', [])
+         if w['number'] == sender),
+        'team'
+    )
+    if sender_access == 'team':
+        # Team members handled by job_whatsapp_inbound_poll — skip webhook to avoid double reply
+        log.debug('Webhook: skipping team member %s — handled by poll job', sender_name)
+        return web.Response(status=200, text='ok')
+
     # Fire and forget — schedule on the main event loop (aiohttp runs in it)
     asyncio.get_event_loop().create_task(_process_whatsapp_message(sender, sender_name, message))
 

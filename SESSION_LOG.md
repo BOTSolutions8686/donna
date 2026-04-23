@@ -464,3 +464,32 @@ handler) never appeared in the dashboard UI team conversation view.
 **Root cause:** The poll path (`job_whatsapp_inbound_poll`) was already logging
 correctly, but the webhook path (`_process_whatsapp_message`) was only logging to
 `communication_log` — not to `team_conversations` which the UI reads.
+
+---
+
+## Session: 2026-04-23 (continued) — Double reply, team panel, intervene double-log
+
+### BUG 1: Double reply to team members
+Webhook handler (`_process_whatsapp_message`) had no dedup — it fired immediately
+on receipt. Then 2 min later `job_whatsapp_inbound_poll` processed the same message
+again (it has wa_name-based dedup but the webhook fires before the wa_name is known).
+**Fix:** `handle_whatsapp_webhook` now checks `access` from whitelist — if `team`,
+returns 200 immediately without spawning `_process_whatsapp_message`. Team messages
+are fully handled by the poll job which has proper dedup. Only `admin` (Talha) goes
+through the webhook processing path.
+
+### BUG 2: Team members missing from left panel
+`/api/team/members` only returned members who had a record in `whatsapp_conversations`
+table (from 24h window tracking). Members like Abdul Malik who had never had a window
+record showed with no last_message, or not at all if the frontend filtered them.
+**Fix:** Endpoint now also queries `team_conversations` for `MAX(timestamp)` per number
+and uses that as fallback for `last_message`. All config `team_members` are always
+returned regardless of whether they have a `whatsapp_conversations` record.
+
+### BUG 3: Intervene send logged twice to customer_conversations
+Customer intervene send was POSTing to both:
+1. `/api/tools/send-whatsapp` with `intervention:true` (which already logs to customer_conversations)
+2. `/api/customers/{phone}/log-human-message` (which logged again = duplicate)
+**Fix:** Removed the second `log-human-message` fetch from the intervene send flow.
+The `send-whatsapp` endpoint's `intervention:true` path is sufficient — it logs
+to `customer_conversations` via `db.log_customer_conversation()`.

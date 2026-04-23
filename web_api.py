@@ -478,17 +478,23 @@ async def get_team_members():
         wa_rows = conn.execute(
             "SELECT contact_number, last_inbound_message_time, window_active FROM whatsapp_conversations"
         ).fetchall()
+        # Also get last message time from team_conversations for members with no wa window record
+        tc_rows = conn.execute(
+            "SELECT whatsapp_number, MAX(timestamp) as last_ts FROM team_conversations GROUP BY whatsapp_number"
+        ).fetchall()
     wa_status = {r["contact_number"]: dict(r) for r in wa_rows}
+    tc_last = {r["whatsapp_number"]: r["last_ts"] for r in tc_rows}
     result = []
     for m in members:
         wa = m.get("whatsapp", "")
         ws = wa_status.get(wa, {})
+        last_msg = ws.get("last_inbound_message_time", "") or tc_last.get(wa, "")
         result.append({
             "name": m.get("name"),
             "role": m.get("role", ""),
             "whatsapp": wa,
             "window_active": ws.get("window_active", 0),
-            "last_message": ws.get("last_inbound_message_time", ""),
+            "last_message": last_msg,
         })
     return {"members": result, "count": len(result)}
 

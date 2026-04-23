@@ -695,9 +695,8 @@ function App(){
     if((isCustomerThread||isTeamThread)&&intervening){
       if(isCustomerThread&&activeCustomer){
         try{
+          // send-whatsapp with intervention:true already logs to customer_conversations
           await authFetch('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:activeCustomer.phone,message:text,intervention:true})});
-          const enc=encodeURIComponent(activeCustomer.phone);
-          await authFetch(`/api/customers/${enc}/log-human-message`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,direction:'outbound',handled_by:'human'})});
         }catch(e){console.warn('WA send failed:',e);}
       }else if(isTeamThread&&activeMember&&activeMember.whatsapp){
         try{
