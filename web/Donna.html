@@ -424,6 +424,22 @@ function CustomerCard({customer,active,onClick,unreadCount}){
 }
 
 // ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+function TeamSection({activeThread,setActiveThread,liveTeam,onClose}){
+  const [open,setOpen]=React.useState(false);
+  return <div style={{padding:'8px 8px 4px',flexShrink:0}}>
+    <button onClick={()=>setOpen(o=>!o)} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 8px 6px',borderRadius:6,color:'var(--text-3)',background:'none',border:'none',cursor:'pointer'}}>
+      <span style={{fontSize:9,fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase'}}>Team</span>
+      <div style={{display:'flex',alignItems:'center',gap:6}}>
+        <span style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--text-3)'}}>{liveTeam.length}</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{transform:open?'rotate(180deg)':'none',transition:'transform 0.2s'}}><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+      </div>
+    </button>
+    {open&&<div style={{maxHeight:280,overflowY:'auto'}}>
+      {liveTeam.map(m=><MemberCard key={m.id} member={m} active={activeThread===m.id} onClick={()=>{setActiveThread(m.id);onClose();}}/>)}
+    </div>}
+  </div>;
+}
+
 function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam}){
   return <div className="sidebar" id="sidebar-el">
     <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
@@ -457,11 +473,8 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
         </button>
       </div>
 
-      {/* Team */}
-      <div style={{padding:'8px 8px 4px'}}>
-        <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 5px'}}>Team</div>
-        {liveTeam.map(m=><MemberCard key={m.id} member={m} active={activeThread===m.id} onClick={()=>{setActiveThread(m.id);onClose();}}/>)}
-      </div>
+      {/* Team — collapsible */}
+      <TeamSection activeThread={activeThread} setActiveThread={setActiveThread} liveTeam={liveTeam} onClose={onClose}/>
 
       {/* Customers */}
       <div style={{padding:'8px 8px 4px',flex:1}}>
@@ -585,6 +598,7 @@ function App(){
   const [toolsOpen,setToolsOpen]=useState(false);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
+  const lastApiMsgCountRef=useRef({});
 
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme',isDark?'dark':'light');
@@ -672,27 +686,41 @@ function App(){
     return ()=>clearInterval(id);
   },[activeThread]);
 
-  // Active team conversation poll (10s interval)
+  // Active team conversation poll (10s interval) — merge-aware to preserve optimistic messages
   useEffect(()=>{
     if(!activeThread||!teamIdMap[activeThread])return;
     const memberName=teamIdMap[activeThread];
     const load=()=>{
       authFetch(`/api/team/conversations/${encodeURIComponent(memberName)}`)
         .then(d=>{
-          if(d&&d.messages&&d.messages.length>0){
-            setThreads(prev=>({...prev,[activeThread]:d.messages.map((m,i)=>({
-              id:'team_'+i,
+          if(d&&d.messages){
+            const apiMsgs=d.messages.map((m,i)=>({
+              id:'team_api_'+i,
               from:m.direction==='outbound'?'donna':'user',
               text:m.message_content||'',
               ts:(m.timestamp||'').slice(11,16),
-            }))}));
+            }));
+            const prevCount=lastApiMsgCountRef.current[activeThread]||0;
+            const newCount=apiMsgs.length;
+            lastApiMsgCountRef.current[activeThread]=newCount;
+            setThreads(prev=>{
+              const current=prev[activeThread]||[];
+              if(newCount>prevCount||prevCount===0){
+                // API has new messages — merge, keeping local optimistic messages not yet in API
+                const apiTextSet=new Set(apiMsgs.map(m=>m.text+m.ts));
+                const localOnly=current.filter(m=>m.asHuman&&!apiTextSet.has(m.text+m.ts));
+                return {...prev,[activeThread]:[...apiMsgs,...localOnly]};
+              }
+              // Count unchanged — preserve current state (don't wipe optimistic intervene msgs)
+              return prev;
+            });
           }
         }).catch(()=>{});
     };
     load();
     const id=setInterval(load,10000);
     return ()=>clearInterval(id);
-  },[activeThread]);
+  },[activeThread,teamIdMap]);
 
   useEffect(()=>{if(activeThread)setUnreadCounts(u=>({...u,[activeThread]:0}));},[activeThread]);
   useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth',block:'end'});},[threads,typing,activeThread,liveCustomerMsgs]);

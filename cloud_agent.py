@@ -3112,6 +3112,61 @@ def should_escalate_immediately(message: str) -> tuple:
 
 # ── Team message handler (ticket-only) ───────────────────────────────────────
 
+async def ask_claude_team_conversational(sender_number: str, sender_name: str, message: str) -> str:
+    """
+    Full conversational AI for team members via WhatsApp.
+    Can discuss work topics, tickets, ERPNext, project updates.
+    Refuses only: personal/private emails, financial records, salary/payroll data.
+    Keeps replies short (WhatsApp-appropriate, max 3-4 sentences).
+    """
+    import anthropic as _ant
+
+    # Load last 6 messages as context
+    history = db.get_team_conversation_history(sender_number, limit=6)
+    messages_ctx = []
+    for h in history[-6:]:
+        role = 'user' if h['direction'] == 'inbound' else 'assistant'
+        messages_ctx.append({'role': role, 'content': h['message_content']})
+    # Ensure current message is last
+    if not messages_ctx or messages_ctx[-1]['role'] != 'user':
+        messages_ctx.append({'role': 'user', 'content': message})
+    elif messages_ctx[-1]['content'] != message:
+        messages_ctx.append({'role': 'user', 'content': message})
+
+    team_convo_prompt = (
+        "You are Donna, the AI operations assistant for BOT Solutions.\n"
+        "You are messaging a team member via WhatsApp.\n\n"
+        "You CAN discuss:\n"
+        "- Work tasks, project updates, ERPNext questions\n"
+        "- Ticket status, client work, technical help\n"
+        "- Team coordination, scheduling, follow-ups\n"
+        "- General work questions and advice\n\n"
+        "You CANNOT share:\n"
+        "- Personal emails or private correspondence\n"
+        "- Salary, payroll, or individual financial compensation data\n"
+        "- Confidential client financial records\n\n"
+        "Style rules:\n"
+        "- Keep replies SHORT (2-4 sentences max — this is WhatsApp)\n"
+        "- No markdown, no bullet points — plain conversational text\n"
+        "- Be helpful and direct, like a smart capable colleague\n"
+        "- You know who you're talking to: " + sender_name + "\n"
+    )
+
+    try:
+        ant_client = _ant.Anthropic(api_key=CONFIG['anthropic']['api_key'])
+        resp = ant_client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=200,
+            system=team_convo_prompt,
+            messages=messages_ctx,
+        )
+        reply = resp.content[0].text.strip()
+        return reply
+    except Exception as e:
+        log.warning('ask_claude_team_conversational failed for %s: %s', sender_name, e)
+        return "Got your message. I'll make sure Talha sees this."
+
+
 async def handle_team_message(sender_number: str, sender_name: str,
                                message: str, wa_name: str = None) -> str:
     """Handle a WhatsApp message from a team member.
@@ -4093,10 +4148,10 @@ async def job_whatsapp_inbound_poll(app):
                     db.resolve_pending_context(sender_number, ticket_ref)
                 continue  # Donna handled it, no Talha ping
 
-            # ── STEP 5: No ticket context — route to handle_team_message() for intelligent handling ──
+            # ── STEP 5: No ticket context — use full conversational AI for team members ──
             if not ticket_ref:
                 try:
-                    reply = await handle_team_message(sender_number, sender_name, content_raw, wa_name=wa_name)
+                    reply = await ask_claude_team_conversational(sender_number, sender_name, content_raw)
                     if reply:
                         result = erp.send_whatsapp(sender_number, reply)
                         sent_name = result.get('name') if isinstance(result, dict) else None
@@ -4105,9 +4160,9 @@ async def job_whatsapp_inbound_poll(app):
                             sent_wa_message_name=sent_name, delivery_status='sent'
                         )
                         db.update_wa_window(sender_number, 'outbound')
-                        log.info('WA poll: handle_team_message replied to %s: %s', sender_name, reply[:80])
+                        log.info('WA poll: conversational reply to %s: %s', sender_name, reply[:80])
                 except Exception as _tm_err:
-                    log.error('handle_team_message error for %s: %s', sender_name, _tm_err, exc_info=True)
+                    log.error('ask_claude_team_conversational error for %s: %s', sender_name, _tm_err, exc_info=True)
                 continue
 
     except Exception as e:

@@ -513,3 +513,27 @@ to `customer_conversations` via `db.log_customer_conversation()`.
 - `addMessage` callback writes updated threads to `sessionStorage` on every message
 - Survives page refresh within same browser session; cleared when tab is closed
 - Only restores if `donna.length > 1` (skips the hardcoded welcome message)
+
+---
+
+## Session: 2026-04-23 (continued) — Conversational team AI, collapsible sidebar, message persistence
+
+### FIX 1: Team WhatsApp replies now use conversational Claude Haiku
+- Added `ask_claude_team_conversational()` function before `handle_team_message()`
+- Loads last 6 messages from `team_conversations` as context for each reply
+- System prompt allows: work, tickets, ERPNext, coordination. Refuses: private emails, salary/payroll, client financials
+- Replies capped at 200 tokens for WhatsApp-appropriate length
+- Falls back to "Got your message. I'll make sure Talha sees this." on API error
+- STEP 5 in poll handler now calls this instead of the ticket-only `handle_team_message()`
+
+### FIX 2: Team section in sidebar is now collapsible
+- Added `TeamSection` React component (collapsed by default, shows member count)
+- Chevron rotates 180° when expanded; member list scrolls at max 280px height
+- Sidebar renders `<TeamSection/>` instead of inline `TEAM.map`
+
+### FIX 3: Intervention messages no longer disappear on next poll
+- Added `lastApiMsgCountRef` to track per-thread API message count
+- Team conversation poll now merges instead of replacing: only updates when API count increases
+- When count unchanged, preserves current thread state (keeps optimistic intervene messages)
+- When count increases, appends local `asHuman` messages not yet reflected in API
+- Poll dependency array updated to `[activeThread, teamIdMap]`
