@@ -1,0 +1,27 @@
+# Credentials — NEVER commit these
+config.py
+config.json
+*.db
+*.sqlite
+
+# Logs — too large for git
+logs/
+*.log
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+.env
+venv/
+
+# Backups
+backups/
+*.tar.gz
+*.zip
+*.bak
+*.bak2
+
+# OS
+.DS_Store
+Thumbs.db

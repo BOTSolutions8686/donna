@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>Donna — Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin="anonymous"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg0:#060d1a;--bg1:#0a1424;--bg2:#0f1c30;--bg3:#152238;
+  --border:#1c2f48;--border-hi:#243d5c;
+  --teal:#0ec4b4;--teal-dim:rgba(14,196,180,0.12);--teal-mid:rgba(14,196,180,0.22);
+  --green:#10d474;--green-dim:rgba(16,212,116,0.12);
+  --amber:#f5a623;--amber-dim:rgba(245,166,35,0.12);
+  --red:#f25c54;--red-dim:rgba(242,92,84,0.12);
+  --yellow:#f5d623;--yellow-dim:rgba(245,214,35,0.10);
+  --text-1:#dce8f5;--text-2:#7a96b8;--text-3:#4a6280;
+  --mono:'IBM Plex Mono',monospace;--sans:'IBM Plex Sans',sans-serif;
+  --sidebar-w:268px;--tools-w:252px;
+}
+[data-theme="light"]{
+  --bg0:#f0f2f5;--bg1:#ffffff;--bg2:#f5f7fa;--bg3:#eaecf0;
+  --border:#dde1e8;--border-hi:#c8cdd8;
+  --text-1:#0f1923;--text-2:#4d6070;--text-3:#8a9bb0;
+  --teal-dim:rgba(14,196,180,0.10);--teal-mid:rgba(14,196,180,0.16);
+  --green-dim:rgba(5,150,80,0.10);--red-dim:rgba(200,50,44,0.10);
+  --amber-dim:rgba(180,110,0,0.10);--yellow-dim:rgba(180,160,0,0.10);
+}
+html,body,#root{height:100%;overflow:hidden;background:var(--bg0);font-family:var(--sans);color:var(--text-1);}
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:4px;}
+button{font-family:var(--sans);cursor:pointer;border:none;background:none;}
+input,textarea{font-family:var(--sans);}
+@keyframes msgIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes blink{0%,80%,100%{opacity:0.2;transform:scale(0.9);}40%{opacity:1;transform:scale(1.1);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.75;transform:scale(1.15);}}
+@keyframes slideIn{from{transform:translateX(-100%);}to{transform:translateX(0);}}
+
+/* ── DESKTOP layout ── */
+.app-shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+.app-body{display:flex;flex:1;overflow:hidden;}
+.sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;background:var(--bg1);border-right:1px solid var(--border);transition:transform 0.25s ease;}
+.main-area{flex:1;display:flex;overflow:hidden;}
+.chat-col{flex:1;display:flex;flex-direction:column;border-right:1px solid var(--border);min-width:0;}
+.tools-panel{width:var(--tools-w);flex-shrink:0;display:flex;flex-direction:column;background:var(--bg1);overflow:hidden;}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;}
+.mob-nav{display:none;}
+.mob-header-btn{display:none;}
+
+/* ── MOBILE layout (≤768px) ── */
+@media(max-width:768px){
+  :root{--sidebar-w:85vw;--tools-w:100vw;}
+
+  .sidebar{
+    position:fixed;top:0;left:0;height:100%;width:var(--sidebar-w);z-index:300;
+    transform:translateX(-100%);box-shadow:4px 0 24px rgba(0,0,0,0.5);
+  }
+  .sidebar.open{transform:translateX(0);animation:slideIn 0.25s ease;}
+  .overlay.open{display:block;}
+  .mob-header-btn{display:flex;}
+  .tools-panel{
+    position:fixed;bottom:0;left:0;right:0;z-index:250;
+    height:70vh;border-radius:16px 16px 0 0;border-top:1px solid var(--border);
+    transform:translateY(100%);transition:transform 0.3s ease;
+  }
+  .tools-panel.open{transform:translateY(0);}
+  .mob-nav{
+    display:flex;height:56px;flex-shrink:0;background:var(--bg1);border-top:1px solid var(--border);
+    align-items:stretch;z-index:100;
+  }
+  .mob-nav-btn{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:3px;font-size:10px;color:var(--text-3);cursor:pointer;border:none;background:none;
+    transition:color 0.15s;padding:4px 0;
+  }
+  .mob-nav-btn.active{color:var(--teal);}
+  .chat-col{border-right:none;}
+  .app-body{flex-direction:column;}
+  .status-bar{display:none;}
+  .header-user-pill{display:none;}
+}
+
+/* ── TABLET (769px – 1024px) ── */
+@media(min-width:769px) and (max-width:1024px){
+  :root{--sidebar-w:220px;--tools-w:210px;}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+const API=window.location.origin;
+function _getToken(){try{const s=localStorage.getItem('donna-user');return s?JSON.parse(s).token:null;}catch{return null;}}
+async function authFetch(path,opts={}){
+  const token=_getToken();
+  if(token){opts.headers={...(opts.headers||{}),Authorization:'Bearer '+token};}
+  const res=await fetch(API+path,opts);
+  if(res.status===401){localStorage.removeItem('donna-user');window.location.reload();return;}
+  if(!res.ok)throw new Error(`HTTP ${res.status}: ${await res.text().catch(()=>'')}`);
+  return res.json();
+}
+const fetchApi=authFetch;
+
+// ─── STATIC DATA ──────────────────────────────────────────────────────────────
+const TEAM=[
+  {id:'talha',  name:'Talha',   role:'Project Lead',   status:'online',avatar:'T'},
+  {id:'albaraa',name:'Al Baraa',role:'Implementation', status:'away',  avatar:'A'},
+];
+
+const TOOLS=[
+  {section:'Financial',adminOnly:true,items:[
+    {id:'overdue_invoices',    label:'Overdue Invoices'},
+    {id:'collections_tracker', label:'Collections Tracker'},
+    {id:'payables_summary',    label:'Payables Summary'},
+    {id:'daily_financial',     label:'Daily Financial'},
+    {id:'pl_overview',         label:'P&L Overview'},
+    {id:'payment_patterns',    label:'Payment Patterns'},
+    {id:'proforma_conversions',label:'Proforma Conversions'},
+  ]},
+  {section:'Operations',items:[
+    {id:'open_tickets',   label:'Open Tickets'},
+    {id:'overdue_tickets',label:'Overdue Tickets'},
+    {id:'create_ticket',  label:'Create Ticket'},
+    {id:'zatca_status',   label:'ZATCA Status'},
+  ]},
+  {section:'Communication',items:[
+    {id:'send_whatsapp',label:'Send WhatsApp'},
+    {id:'send_email',   label:'Send Email'},
+  ]},
+  {section:'System',adminOnly:true,items:[
+    {id:'donna_suggestions',label:'Suggestions Log'},
+    {id:'session_log',      label:'Session Log'},
+  ]},
+];
+
+// ─── UI PRIMITIVES ────────────────────────────────────────────────────────────
+const Badge=({color,children})=>{
+  const c={
+    green:{bg:'var(--green-dim)',text:'var(--green)'},
+    red:  {bg:'var(--red-dim)',  text:'var(--red)'},
+    amber:{bg:'var(--amber-dim)',text:'var(--amber)'},
+    teal: {bg:'var(--teal-dim)', text:'var(--teal)'},
+  }[color]||{bg:'var(--teal-dim)',text:'var(--teal)'};
+  return <span style={{display:'inline-flex',alignItems:'center',gap:5,background:c.bg,color:c.text,borderRadius:4,padding:'2px 8px',fontSize:11,fontWeight:600,fontFamily:'var(--mono)'}}>
+    <span style={{width:5,height:5,borderRadius:'50%',background:c.text,flexShrink:0}}/>{children}
+  </span>;
+};
+
+const MiniTable=({headers,rows})=>(
+  <div style={{overflowX:'auto',marginTop:8,WebkitOverflowScrolling:'touch'}}>
+    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,fontFamily:'var(--mono)',minWidth:400}}>
+      <thead><tr>{headers.map(h=><th key={h} style={{textAlign:'left',padding:'6px 10px',color:'var(--text-3)',borderBottom:'1px solid var(--border)',fontWeight:500,fontSize:11,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
+      <tbody>{rows.map((row,i)=><tr key={i} style={{borderBottom:'1px solid var(--border)'}}>{row.map((cell,j)=><td key={j} style={{padding:'7px 10px',color:'var(--text-1)',whiteSpace:'nowrap',verticalAlign:'middle'}}>{cell}</td>)}</tr>)}</tbody>
+    </table>
+  </div>
+);
+
+const MetricRow=({metrics})=>(
+  <div style={{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}}>
+    {metrics.map(m=>(
+      <div key={m.label} style={{background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:8,padding:'10px 14px',flex:'1 1 80px',minWidth:80}}>
+        <div style={{fontSize:10,color:'var(--text-3)',marginBottom:4,textTransform:'uppercase',letterSpacing:'0.06em'}}>{m.label}</div>
+        <div style={{fontSize:18,fontWeight:600,color:m.color||'var(--text-1)',fontFamily:'var(--mono)'}}>{m.value}</div>
+        {m.sub&&<div style={{fontSize:10,color:'var(--text-3)',marginTop:2}}>{m.sub}</div>}
+      </div>
+    ))}
+  </div>
+);
+
+const fmt=n=>'SAR '+Number(n).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+function Divider(){return <span style={{margin:'0 8px',color:'var(--border-hi)'}}>·</span>;}
+
+// ─── TOOL COMPONENTS ──────────────────────────────────────────────────────────
+function ApiOverdueInvoices({data}){
+  if(!data?.invoices?.length) return <div style={{marginTop:8,color:'var(--green)',fontSize:13}}>No overdue invoices.</div>;
+  const rows=data.invoices.map(x=>[x.customer||x.party||'—',x.name,fmt(x.outstanding_amount||0),String(x.due_date||'').slice(0,10),`${x.days_late||0}d`,<Badge color={x.days_late>30?'red':x.days_late>7?'amber':'teal'}>{x.days_late>30?'Critical':x.days_late>7?'Overdue':'Grace'}</Badge>]);
+  return <MiniTable headers={['Client','Invoice','Amount','Due','OD','Status']} rows={rows}/>;
+}
+function ApiCollections({data}){
+  if(!data?.escalations?.length) return <div style={{marginTop:8,color:'var(--text-3)',fontSize:13}}>No active collections escalations.</div>;
+  const rows=data.escalations.map(x=>[x.customer||'—',x.invoice_name||'—',fmt(x.amount||0),`${x.days_overdue||0}d`,<Badge color={x.times_flagged>=14?'red':'amber'}>{x.times_flagged>=14?'Escalated':'Warning'}</Badge>]);
+  return <MiniTable headers={['Client','Invoice','Amount','Overdue','Status']} rows={rows}/>;
+}
+function ApiPayables({data}){
+  if(!data?.payables?.length) return <div style={{marginTop:8,color:'var(--green)',fontSize:13}}>No overdue payables.</div>;
+  const rows=data.payables.map(x=>[x.supplier||x.party||'—',fmt(x.outstanding_amount||0),String(x.due_date||'').slice(0,10),<Badge color={x.days_late>0?'red':'green'}>{x.days_late>0?`${x.days_late}d OD`:'OK'}</Badge>]);
+  return <><div style={{marginTop:8,padding:'6px 10px',background:'var(--red-dim)',borderRadius:6,fontSize:12,color:'var(--red)'}}>Total owed: {fmt(data.total_owed||0)}</div><MiniTable headers={['Vendor','Amount','Due','Status']} rows={rows}/></>;
+}
+function ApiDailyFinancial({data}){
+  if(!data) return null;
+  return <MetricRow metrics={[
+    {label:'Invoices 7d',value:String(data.invoices_this_week||0)},
+    {label:'Payments 7d',value:String(data.payments_this_week||0),color:'var(--green)'},
+    {label:'Overdue',value:fmt(data.overdue_total||0),color:'var(--red)'},
+    {label:'Proformas',value:String(data.proforma_count||0),color:'var(--amber)'},
+  ]}/>;
+}
+function ApiPL({data}){
+  if(!data) return null;
+  const margin=data.revenue>0?((data.net/data.revenue)*100).toFixed(1):'0.0';
+  return <MetricRow metrics={[
+    {label:'Revenue 30d',value:fmt(data.revenue||0),color:'var(--teal)'},
+    {label:'Expenses',value:fmt(data.expenses||0)},
+    {label:'Net',value:fmt(data.net||0),color:(data.net||0)>=0?'var(--green)':'var(--red)',sub:`${margin}% margin`},
+  ]}/>;
+}
+function ApiPaymentPatterns({data}){
+  if(!data?.patterns?.length) return <div style={{marginTop:8,color:'var(--text-3)',fontSize:13}}>Not enough data.</div>;
+  const rows=data.patterns.slice(0,10).map(x=>[x.customer,`${x.avg_days_to_pay}d`,<Badge color={x.status==='late'?'amber':'green'}>{x.status==='late'?'Slow':'Good'}</Badge>,x.payments_count+' pmts']);
+  return <MiniTable headers={['Client','Avg Days','Reliability','Count']} rows={rows}/>;
+}
+function ApiProformas({data}){
+  if(!data?.proformas?.length) return <div style={{marginTop:8,color:'var(--green)',fontSize:13}}>No unconverted proformas.</div>;
+  const rows=data.proformas.map(x=>[x.name,x.customer||'—',fmt(x.grand_total||0),<Badge color={x.per_billed>50?'teal':'amber'}>{x.status||'Pending'}</Badge>]);
+  return <><div style={{marginTop:8,padding:'6px 10px',background:'var(--amber-dim)',borderRadius:6,fontSize:12,color:'var(--amber)'}}>Pipeline: {fmt(data.total_value||0)}</div><MiniTable headers={['Proforma','Client','Value','Status']} rows={rows}/></>;
+}
+function ApiOpenTickets({data}){
+  if(!data?.tickets?.length) return <div style={{marginTop:8,color:'var(--green)',fontSize:13}}>No open tickets.</div>;
+  const rows=data.tickets.slice(0,10).map(x=>[x.name,(x.subject||'').slice(0,35),x.priority||'Med',<Badge color={x.priority==='Urgent'||x.priority==='High'?'red':'amber'}>{x.priority||'Med'}</Badge>]);
+  return <MiniTable headers={['#','Subject','Priority','Badge']} rows={rows}/>;
+}
+function ApiOverdueTickets({data}){
+  if(!data?.tickets?.length) return <div style={{marginTop:8,color:'var(--green)',fontSize:13}}>No SLA breaches.</div>;
+  const rows=data.tickets.slice(0,10).map(x=>[x.name,(x.subject||'').slice(0,30),`${Math.round(x.age_hours||0)}h`,`${x.sla_hours||0}h SLA`,<Badge color='red'>Breached</Badge>]);
+  return <MiniTable headers={['#','Subject','Age','SLA','Status']} rows={rows}/>;
+}
+function ApiZatca({data}){
+  if(!data?.issues?.length) return <div style={{marginTop:8,padding:'10px 14px',background:'var(--green-dim)',border:'1px solid rgba(16,212,116,0.2)',borderRadius:8,fontSize:13,color:'var(--green)'}}>ZATCA: all clear.</div>;
+  const rows=data.issues.map(x=>[x.invoice_reference||x.name,x.status||'—',x.zatca_status||'—',String(x.creation||'').slice(0,10)]);
+  return <><div style={{marginTop:8,padding:'6px 10px',background:'var(--red-dim)',borderRadius:6,fontSize:12,color:'var(--red)'}}>{data.count} issue(s)</div><MiniTable headers={['Invoice','Status','ZATCA','Date']} rows={rows}/></>;
+}
+function ApiSuggestions({data}){
+  if(!data?.suggestions?.length) return <div style={{marginTop:8,color:'var(--text-3)',fontSize:13}}>No suggestions.</div>;
+  return <div style={{display:'flex',flexDirection:'column',gap:6,marginTop:8}}>
+    {data.suggestions.map((s,i)=>(
+      <div key={i} style={{padding:'9px 12px',background:'var(--bg0)',borderLeft:`3px solid var(--${s.priority==='high'?'red':s.priority==='medium'?'amber':'teal'})`,borderRadius:'0 7px 7px 0',fontSize:12}}>
+        <div style={{color:'var(--text-3)',fontSize:10,marginBottom:3}}>{s.date_noticed||''} · {s.priority||''}</div>
+        <div style={{color:'var(--text-1)',lineHeight:1.5}}>{s.description}</div>
+      </div>
+    ))}
+  </div>;
+}
+function ApiSessionLog({data}){
+  if(!data?.content) return <div style={{marginTop:8,color:'var(--text-3)',fontSize:13}}>No session log.</div>;
+  return <div style={{marginTop:8,background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:8,padding:'12px',maxHeight:300,overflowY:'auto',fontSize:11,lineHeight:1.7,fontFamily:'var(--mono)',color:'var(--text-2)',whiteSpace:'pre-wrap'}}>{data.content.split('\n').slice(-60).join('\n')}</div>;
+}
+
+function ApiSendWhatsApp(){
+  const [to,setTo]=useState('');const [msg,setMsg]=useState('');const [status,setStatus]=useState(null);const [loading,setLoading]=useState(false);
+  const send=async()=>{if(!to||!msg)return;setLoading(true);try{const r=await fetchApi('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,message:msg})});setStatus({ok:true,msg:'Sent!'});}catch(e){setStatus({ok:false,msg:e.message});}setLoading(false);};
+  if(status) return <div style={{marginTop:8,color:status.ok?'var(--green)':'var(--red)',fontSize:13}}>{status.ok?'✓ ':''}{status.msg}</div>;
+  const inp={background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:6,padding:'9px 12px',color:'var(--text-1)',fontSize:13,outline:'none',width:'100%'};
+  return <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:8}}>
+    <input value={to} onChange={e=>setTo(e.target.value)} placeholder="+966XXXXXXXXX" style={inp}/>
+    <textarea value={msg} onChange={e=>setMsg(e.target.value)} rows={3} placeholder="Message..." style={{...inp,resize:'none'}}/>
+    <button onClick={send} disabled={loading} style={{background:'#25d366',color:'#fff',borderRadius:6,padding:'9px 16px',fontSize:13,fontWeight:600,opacity:loading?0.6:1,alignSelf:'flex-start'}}>{loading?'Sending…':'Send WhatsApp'}</button>
+  </div>;
+}
+function ApiSendEmail(){
+  const [to,setTo]=useState('');const [subj,setSubj]=useState('');const [body,setBody]=useState('');const [status,setStatus]=useState(null);const [loading,setLoading]=useState(false);
+  const send=async()=>{if(!to||!subj)return;setLoading(true);try{await fetchApi('/api/tools/send-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,subject:subj,message:body})});setStatus({ok:true});}catch(e){setStatus({ok:false,msg:e.message});}setLoading(false);};
+  if(status) return <div style={{marginTop:8,color:status.ok?'var(--green)':'var(--red)',fontSize:13}}>{status.ok?'✓ Email sent.':status.msg}</div>;
+  const inp={background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:6,padding:'9px 12px',color:'var(--text-1)',fontSize:13,outline:'none',width:'100%'};
+  return <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:8}}>
+    <input value={to} onChange={e=>setTo(e.target.value)} placeholder="To: email@example.com" style={inp}/>
+    <input value={subj} onChange={e=>setSubj(e.target.value)} placeholder="Subject" style={inp}/>
+    <textarea value={body} onChange={e=>setBody(e.target.value)} rows={3} placeholder="Body..." style={{...inp,resize:'none'}}/>
+    <button onClick={send} disabled={loading} style={{background:'var(--teal)',color:'#000',borderRadius:6,padding:'9px 16px',fontSize:13,fontWeight:600,opacity:loading?0.6:1,alignSelf:'flex-start'}}>{loading?'Sending…':'Send Email'}</button>
+  </div>;
+}
+function ApiCreateTicket(){
+  const [title,setTitle]=useState('');const [desc,setDesc]=useState('');const [priority,setPriority]=useState('Medium');const [done,setDone]=useState(null);const [loading,setLoading]=useState(false);
+  const create=async()=>{if(!title)return;setLoading(true);try{const r=await fetchApi('/api/tools/create-ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,description:desc,priority})});setDone(r.ticket_name||'created');}catch(e){setDone('error: '+e.message);}setLoading(false);};
+  if(done) return <div style={{marginTop:8,padding:'10px 14px',background:done.startsWith('error')?'var(--red-dim)':'var(--green-dim)',borderRadius:8,fontSize:13,color:done.startsWith('error')?'var(--red)':'var(--green)'}}>{done.startsWith('error')?done:'✓ Ticket '+done+' created.'}</div>;
+  const inp={background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:6,padding:'9px 12px',color:'var(--text-1)',fontSize:13,outline:'none',width:'100%'};
+  return <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:8}}>
+    <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ticket title..." style={inp}/>
+    <textarea value={desc} onChange={e=>setDesc(e.target.value)} rows={2} placeholder="Description..." style={{...inp,resize:'none'}}/>
+    <select value={priority} onChange={e=>setPriority(e.target.value)} style={{...inp}}><option>Urgent</option><option>High</option><option>Medium</option><option>Low</option></select>
+    <button onClick={create} disabled={loading} style={{background:'var(--teal)',color:'#000',borderRadius:6,padding:'9px 16px',fontSize:13,fontWeight:600,opacity:loading?0.6:1,alignSelf:'flex-start'}}>{loading?'Creating…':'Create Ticket'}</button>
+  </div>;
+}
+
+const TOOL_API_MAP={
+  overdue_invoices:    {ep:'/api/tools/overdue-invoices',    Comp:ApiOverdueInvoices,    text:d=>`${d.count} overdue invoice(s) — Exposure: **${fmt(d.total_exposure)}**`},
+  collections_tracker: {ep:'/api/tools/collections-tracker', Comp:ApiCollections,        text:d=>`Collections: **${d.count} active**`},
+  payables_summary:    {ep:'/api/tools/payables-summary',    Comp:ApiPayables,           text:d=>`${d.count} overdue payable(s) — Owed: **${fmt(d.total_owed)}**`},
+  daily_financial:     {ep:'/api/tools/daily-financial',     Comp:ApiDailyFinancial,     text:d=>`Daily snapshot for **${d.date}**`},
+  pl_overview:         {ep:'/api/tools/pl-overview',         Comp:ApiPL,                 text:d=>`P&L **${d.period}** — Net: ${fmt(d.net)}`},
+  payment_patterns:    {ep:'/api/tools/payment-patterns',    Comp:ApiPaymentPatterns,    text:d=>`Payment patterns — **${d.count} customers**`},
+  proforma_conversions:{ep:'/api/tools/proforma-conversions',Comp:ApiProformas,          text:d=>`${d.count} proforma(s) — Pipeline: **${fmt(d.total_value)}**`},
+  open_tickets:        {ep:'/api/tools/open-tickets',        Comp:ApiOpenTickets,        text:d=>`**${d.count} open ticket(s)**`},
+  overdue_tickets:     {ep:'/api/tools/overdue-tickets',     Comp:ApiOverdueTickets,     text:d=>`**${d.count} ticket(s)** past SLA`},
+  create_ticket:       {                                     Comp:()=><ApiCreateTicket/>,text:()=>'Create a new support ticket.'},
+  zatca_status:        {ep:'/api/tools/zatca-status',        Comp:ApiZatca,              text:d=>d.count===0?'ZATCA: all clear.':`ZATCA: **${d.count} issue(s)**`},
+  send_whatsapp:       {                                     Comp:()=><ApiSendWhatsApp/>,text:()=>'WhatsApp composer ready.'},
+  send_email:          {                                     Comp:()=><ApiSendEmail/>,   text:()=>'Email composer ready.'},
+  donna_suggestions:   {ep:'/api/tools/suggestions-log',    Comp:ApiSuggestions,        text:d=>`Suggestions: **${d.suggestions.length}** item(s)`},
+  session_log:         {ep:'/api/tools/session-log',        Comp:ApiSessionLog,         text:()=>'Session log (last 60 lines)'},
+};
+
+// ─── CHAT ─────────────────────────────────────────────────────────────────────
+function parseMarkdown(text){
+  return text.split(/(\*\*[^*]+\*\*)/g).map((p,i)=>p.startsWith('**')?<strong key={i}>{p.slice(2,-2)}</strong>:p);
+}
+
+function FlagCard({reason}){
+  return <div style={{margin:'4px 0 16px',padding:'12px 14px',background:'var(--yellow-dim)',border:'1px solid rgba(245,214,35,0.25)',borderRadius:10,borderLeft:'3px solid var(--yellow)',animation:'msgIn 0.25s ease-out'}}>
+    <div style={{fontSize:12,fontWeight:600,color:'var(--yellow)',marginBottom:4,display:'flex',alignItems:'center',gap:6}}><span>🚩</span> Donna flagged this</div>
+    <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6}}>{reason}</div>
+  </div>;
+}
+
+function ChatMessage({msg,isCustomerThread}){
+  if(msg.type==='flag') return <FlagCard reason={msg.flagReason}/>;
+  const isRight=isCustomerThread?msg.from==='donna':msg.from==='user';
+  const isDonna=msg.from==='donna';
+  const isHuman=msg.asHuman||msg.handled_by==='human';
+  const ApiComp=msg.apiToolId&&TOOL_API_MAP[msg.apiToolId]?TOOL_API_MAP[msg.apiToolId].Comp:null;
+  const bubbleStyle={
+    background:isRight?'var(--teal-mid)':'var(--bg3)',
+    border:`1px solid ${isRight?'rgba(14,196,180,0.3)':'var(--border)'}`,
+    borderRadius:isRight?'12px 12px 4px 12px':'12px 12px 12px 4px',
+    padding:'10px 14px',fontSize:13,lineHeight:1.6,color:'var(--text-1)',
+  };
+  if(isHuman&&isRight) bubbleStyle.background='var(--amber-dim)';
+  return <div style={{display:'flex',flexDirection:isRight?'row-reverse':'row',alignItems:'flex-start',gap:10,marginBottom:16,animation:'msgIn 0.25s ease-out'}}>
+    {isDonna&&<div style={{width:28,height:28,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:'var(--teal)',flexShrink:0,marginTop:1}}>{isHuman?'👤':'D'}</div>}
+    <div style={{maxWidth:'82%'}}>
+      <div style={bubbleStyle}>
+        <div>{parseMarkdown(msg.text||'')}</div>
+        {ApiComp&&<ApiComp data={msg.apiData}/>}
+      </div>
+      <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,textAlign:isRight?'right':'left',fontFamily:'var(--mono)'}}>{msg.ts}{isHuman?' · You':''}</div>
+    </div>
+  </div>;
+}
+
+function TypingIndicator(){
+  return <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+    <div style={{width:28,height:28,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:'var(--teal)',flexShrink:0}}>D</div>
+    <div style={{background:'var(--bg3)',border:'1px solid var(--border)',borderRadius:'12px 12px 12px 4px',padding:'10px 16px',display:'flex',gap:5,alignItems:'center'}}>
+      {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:'50%',background:'var(--teal)',animation:`blink 1.2s infinite ${i*0.2}s`}}/>)}
+    </div>
+  </div>;
+}
+
+// ─── TOOLS PANEL CONTENT ─────────────────────────────────────────────────────
+function ToolSection({section,items,onTrigger,activeId}){
+  const [open,setOpen]=useState(true);
+  return <div style={{marginBottom:8}}>
+    <button onClick={()=>setOpen(o=>!o)} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 12px',borderRadius:6,color:'var(--text-3)',fontSize:11,fontWeight:600,letterSpacing:'0.08em',textTransform:'uppercase'}}>
+      <span>{section}</span>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{transform:open?'rotate(180deg)':'none',transition:'transform 0.2s'}}><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+    </button>
+    {open&&<div style={{display:'flex',flexDirection:'column',gap:2,paddingLeft:4}}>
+      {items.map(item=>{
+        const active=activeId===item.id;
+        return <button key={item.id} onClick={()=>onTrigger(item.id)}
+          style={{textAlign:'left',padding:'8px 10px',borderRadius:6,fontSize:13,color:active?'var(--teal)':'var(--text-2)',background:active?'var(--teal-dim)':'transparent',transition:'all 0.15s',display:'flex',alignItems:'center',gap:7,border:`1px solid ${active?'rgba(14,196,180,0.25)':'transparent'}`}}
+          onMouseEnter={e=>{if(!active){e.currentTarget.style.background='var(--bg3)';e.currentTarget.style.color='var(--text-1)';}}}
+          onMouseLeave={e=>{e.currentTarget.style.background=active?'var(--teal-dim)':'transparent';e.currentTarget.style.color=active?'var(--teal)':'var(--text-2)';}}>
+          <span style={{flex:1}}>{item.label}</span>
+        </button>;
+      })}
+    </div>}
+  </div>;
+}
+
+// ─── SIDEBAR CARDS ────────────────────────────────────────────────────────────
+function MemberCard({member,active,onClick}){
+  const sc={online:'var(--green)',away:'var(--amber)',offline:'var(--text-3)'};
+  return <button onClick={onClick} style={{width:'100%',textAlign:'left',padding:'9px 10px',borderRadius:8,background:active?'var(--bg3)':'transparent',border:`1px solid ${active?'var(--border-hi)':'transparent'}`,cursor:'pointer',transition:'all 0.15s',display:'flex',alignItems:'center',gap:9,minHeight:48}}
+    onMouseEnter={e=>{if(!active)e.currentTarget.style.background='var(--bg2)';}}
+    onMouseLeave={e=>{if(!active)e.currentTarget.style.background='transparent';}}>
+    <div style={{position:'relative',flexShrink:0}}>
+      <div style={{width:32,height:32,borderRadius:'50%',background:'var(--bg3)',border:'1px solid var(--border-hi)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,color:'var(--text-1)'}}>{member.avatar}</div>
+      <div style={{position:'absolute',bottom:0,right:0,width:8,height:8,borderRadius:'50%',background:sc[member.status],border:'2px solid var(--bg1)'}}/>
+    </div>
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{fontSize:13,fontWeight:500,color:active?'var(--teal)':'var(--text-1)'}}>{member.name}</div>
+      <div style={{fontSize:11,color:'var(--text-3)',marginTop:1}}>{member.role}</div>
+    </div>
+  </button>;
+}
+
+function CustomerCard({customer,active,onClick,unreadCount}){
+  const sc={green:{bar:'var(--green)',dot:'var(--green)'},orange:{bar:'var(--amber)',dot:'var(--amber)'},red:{bar:'var(--red)',dot:'var(--red)'}}[customer.status]||{bar:'var(--green)',dot:'var(--green)'};
+  const isFlagged=customer.status==='orange'||customer.status==='red';
+  const initials=(customer.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
+  return <button onClick={onClick} style={{width:'100%',textAlign:'left',borderRadius:8,background:active?'var(--bg3)':'transparent',border:`1px solid ${active?'var(--border-hi)':'transparent'}`,cursor:'pointer',transition:'all 0.15s',display:'flex',alignItems:'stretch',overflow:'hidden',marginBottom:2}}
+    onMouseEnter={e=>{if(!active)e.currentTarget.style.background='var(--bg2)';}}
+    onMouseLeave={e=>{if(!active)e.currentTarget.style.background='transparent';}}>
+    <div style={{width:3,background:sc.bar,flexShrink:0,borderRadius:'8px 0 0 8px'}}/>
+    <div style={{flex:1,padding:'9px 10px',display:'flex',flexDirection:'column',gap:3,minWidth:0}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
+        <div style={{display:'flex',alignItems:'center',gap:7,minWidth:0}}>
+          <div style={{width:28,height:28,borderRadius:'50%',background:'var(--bg3)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:sc.dot,flexShrink:0}}>{initials}</div>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:500,color:active?'var(--teal)':'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{customer.name}</div>
+            <div style={{fontSize:11,color:'var(--text-3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{customer.company}</div>
+          </div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+          {unreadCount>0&&!active&&<span style={{background:'var(--teal)',color:'#fff',borderRadius:9,fontSize:9,fontWeight:700,padding:'1px 5px',fontFamily:'var(--mono)',animation:'pulse 1.5s ease-in-out infinite'}}>{unreadCount}</span>}
+          <div style={{fontSize:10,color:'var(--text-3)',fontFamily:'var(--mono)'}}>{customer.lastTime}</div>
+        </div>
+      </div>
+      <div style={{fontSize:11,color:'var(--text-3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingLeft:35}}>{customer.lastMsg}</div>
+      {isFlagged&&<div style={{paddingLeft:35}}><span style={{fontSize:10,color:'var(--amber)',fontWeight:500}}>🚩 Flagged</span></div>}
+    </div>
+  </button>;
+}
+
+// ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts}){
+  return <div className="sidebar" id="sidebar-el">
+    <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+      <div style={{display:'flex',alignItems:'center',gap:9}}>
+        <div style={{width:30,height:30,borderRadius:7,background:'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="3" fill="#000" opacity="0.9"/><circle cx="7.5" cy="7.5" r="6.5" stroke="#000" strokeWidth="1.2" opacity="0.6"/></svg>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)',letterSpacing:'0.04em'}}>DONNA</div>
+          <div style={{fontSize:9,color:'var(--text-3)',letterSpacing:'0.1em',textTransform:'uppercase'}}>Operations AI</div>
+        </div>
+        <button onClick={()=>setIsDark(d=>!d)} style={{width:30,height:30,borderRadius:7,background:'var(--bg2)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',color:'var(--text-2)'}}>
+          {isDark?<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="3" stroke="currentColor" strokeWidth="1.4"/><path d="M7 1v1.5M7 11.5V13M1 7h1.5M11.5 7H13M2.93 2.93l1.06 1.06M10.01 10.01l1.06 1.06M2.93 11.07l1.06-1.06M10.01 3.99l1.06-1.06" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+            :<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M11.5 8.5A5 5 0 0 1 5.5 2.5a5 5 0 1 0 6 6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" fill="none"/></svg>}
+        </button>
+      </div>
+    </div>
+
+    <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',WebkitOverflowScrolling:'touch'}}>
+      {/* Assistant */}
+      <div style={{padding:'10px 8px 4px'}}>
+        <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 5px'}}>Assistant</div>
+        <button onClick={()=>{setActiveThread('donna');onClose();}} style={{width:'100%',textAlign:'left',padding:'9px 10px',borderRadius:8,background:activeThread==='donna'?'var(--bg3)':'transparent',border:`1px solid ${activeThread==='donna'?'var(--border-hi)':'transparent'}`,cursor:'pointer',transition:'all 0.15s',display:'flex',alignItems:'center',gap:9,minHeight:48}}
+          onMouseEnter={e=>{if(activeThread!=='donna')e.currentTarget.style.background='var(--bg2)';}}
+          onMouseLeave={e=>{if(activeThread!=='donna')e.currentTarget.style.background='transparent';}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,color:'var(--teal)'}}>D</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:500,color:activeThread==='donna'?'var(--teal)':'var(--text-1)'}}>Donna</div>
+            <div style={{fontSize:11,color:'var(--text-3)'}}>AI Assistant</div>
+          </div>
+        </button>
+      </div>
+
+      {/* Team */}
+      <div style={{padding:'8px 8px 4px'}}>
+        <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 5px'}}>Team</div>
+        {TEAM.map(m=><MemberCard key={m.id} member={m} active={activeThread===m.id} onClick={()=>{setActiveThread(m.id);onClose();}}/>)}
+      </div>
+
+      {/* Customers */}
+      <div style={{padding:'8px 8px 4px',flex:1}}>
+        <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 7px'}}>Customers</div>
+        <div style={{display:'flex',gap:4,marginBottom:8,padding:'0 2px'}}>
+          {[['all','All'],['active','Active'],['flagged','🚩'],['waiting','Wait']].map(([key,label])=>(
+            <button key={key} onClick={()=>setCustomerFilter(key)} style={{flex:1,padding:'5px 2px',borderRadius:5,fontSize:10,fontWeight:600,cursor:'pointer',transition:'all 0.15s',background:customerFilter===key?'var(--teal-dim)':'transparent',color:customerFilter===key?'var(--teal)':'var(--text-3)',border:`1px solid ${customerFilter===key?'rgba(14,196,180,0.3)':'transparent'}`}}>
+              {label}<span style={{display:'block',fontSize:11,fontWeight:700,color:customerFilter===key?'var(--teal)':'var(--text-2)',fontFamily:'var(--mono)'}}>{filterCounts[key]}</span>
+            </button>
+          ))}
+        </div>
+        {filteredCustomers.length===0&&<div style={{textAlign:'center',color:'var(--text-3)',fontSize:12,padding:'20px 0'}}>No customers yet</div>}
+        {filteredCustomers.map(c=><CustomerCard key={c.id} customer={c} active={activeThread===c.id} onClick={()=>{setActiveThread(c.id);onClose();}} unreadCount={unreadCounts[c.id]||0}/>)}
+      </div>
+    </div>
+
+    {/* User footer */}
+    <div style={{padding:'10px 12px',borderTop:'1px solid var(--border)',display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+      <div style={{width:28,height:28,borderRadius:'50%',background:'var(--bg3)',border:'1px solid var(--border-hi)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'var(--teal)',flexShrink:0}}>{loggedIn.initials}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:500,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{loggedIn.name}</div>
+        <div style={{fontSize:10,color:'var(--text-3)'}}>{loggedIn.role}</div>
+      </div>
+      <button onClick={()=>{const _s=localStorage.getItem('donna-user');if(_s){const _t=JSON.parse(_s).token;if(_t)fetch(API+'/api/auth/logout-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_t})}).catch(()=>{});}localStorage.removeItem('donna-user');window.location.reload();}} title="Sign out" style={{color:'var(--text-3)',cursor:'pointer',padding:4}}
+        onMouseEnter={e=>e.currentTarget.style.color='var(--red)'}
+        onMouseLeave={e=>e.currentTarget.style.color='var(--text-3)'}>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2H2.5A1.5 1.5 0 0 0 1 3.5v7A1.5 1.5 0 0 0 2.5 12H5M9 9.5L12 7M12 7L9 4.5M12 7H5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      </button>
+    </div>
+  </div>;
+}
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+function LoginScreen({onLogin}){
+  const [user,setUser]=useState('');const [pass,setPass]=useState('');const [loading,setLoading]=useState(false);const [error,setError]=useState('');
+  const handle=async e=>{
+    e.preventDefault();
+    if(!user.trim()||!pass.trim()){setError('Please fill in all fields.');return;}
+    setError('');setLoading(true);
+    try{
+      const resp=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.trim(),password:pass.trim()})});
+      if(!resp.ok){const e=await resp.json().catch(()=>({}));setError(e.detail||'Invalid credentials');setLoading(false);return;}
+      const {token,username,role}=await resp.json();
+      const name=username;
+      onLogin({name,initials:name.split(/[\s@]/)[0].slice(0,2).toUpperCase(),role,token});
+    }catch(err){setError('Could not connect: '+err.message);setLoading(false);}
+  };
+  const inp={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 14px',color:'var(--text-1)',fontSize:14,outline:'none',fontFamily:'var(--sans)',transition:'border-color 0.15s'};
+  const lbl={fontSize:11,color:'var(--text-3)',marginBottom:6,fontWeight:500,letterSpacing:'0.04em',display:'block'};
+  return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'var(--bg0)',padding:16}}>
+    <div style={{width:'100%',maxWidth:400,background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:16,padding:'32px 28px',boxShadow:'0 24px 80px rgba(0,0,0,0.5)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:28}}>
+        <div style={{width:38,height:38,borderRadius:9,background:'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <svg width="18" height="18" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="3" fill="#000" opacity="0.9"/><circle cx="7.5" cy="7.5" r="6.5" stroke="#000" strokeWidth="1.2" opacity="0.6"/></svg>
+        </div>
+        <div>
+          <div style={{fontSize:18,fontWeight:700,letterSpacing:'0.04em',color:'var(--text-1)'}}>DONNA</div>
+          <div style={{fontSize:10,color:'var(--text-3)',letterSpacing:'0.1em',textTransform:'uppercase'}}>Operations AI · botsolutions.tech</div>
+        </div>
+      </div>
+      <div style={{fontSize:20,fontWeight:600,color:'var(--text-1)',marginBottom:4}}>Sign in</div>
+      <div style={{fontSize:13,color:'var(--text-3)',marginBottom:24}}>Access the Donna dashboard</div>
+      <form onSubmit={handle} style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div><label style={lbl}>USERNAME</label><input value={user} onChange={e=>setUser(e.target.value)} placeholder="talha@botsolutions.tech" style={inp} autoComplete="username" onFocus={e=>e.target.style.borderColor='var(--teal)'} onBlur={e=>e.target.style.borderColor='var(--border)'}/></div>
+        <div><label style={lbl}>PASSWORD</label><input type="password" value={pass} onChange={e=>setPass(e.target.value)} style={inp} autoComplete="current-password" onFocus={e=>e.target.style.borderColor='var(--teal)'} onBlur={e=>e.target.style.borderColor='var(--border)'}/></div>
+        {error&&<div style={{fontSize:12,color:'var(--red)',padding:'9px 12px',background:'var(--red-dim)',borderRadius:7}}>{error}</div>}
+        <button type="submit" disabled={loading} style={{marginTop:4,padding:'13px',background:'var(--teal)',color:'#000',borderRadius:9,fontSize:15,fontWeight:700,cursor:loading?'wait':'pointer',opacity:loading?0.7:1,transition:'opacity 0.15s',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+          {loading?<><span style={{width:14,height:14,borderRadius:'50%',border:'2px solid #000',borderTopColor:'transparent',display:'inline-block',animation:'spin 0.7s linear infinite'}}/>Connecting…</>:'Sign In'}
+        </button>
+      </form>
+      <div style={{marginTop:20,textAlign:'center',fontSize:11,color:'var(--text-3)'}}>Donna v1.0 · BOT Solutions · KSA</div>
+    </div>
+  </div>;
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+const makeInitialThreads=()=>({
+  donna:[{id:1,from:'donna',text:"Good morning. I'm live and monitoring operations. Run a tool from the panel, or ask me anything.",ts:'09:00'}],
+  talha:[{id:1,from:'donna',text:"Hi Talha. Dashboard is live. Let me know if you need anything.",ts:'09:00'}],
+  albaraa:[{id:1,from:'donna',text:"Good morning Al Baraa. Let me know if you need ticket info.",ts:'09:00'}],
+});
+
+function App(){
+  const [loggedIn,setLoggedIn]=useState(null);
+  const [authChecked,setAuthChecked]=useState(false);
+  useEffect(()=>{
+    const _raw=localStorage.getItem('donna-user');
+    if(!_raw){setAuthChecked(true);return;}
+    let _stored;try{_stored=JSON.parse(_raw);}catch{localStorage.removeItem('donna-user');setAuthChecked(true);return;}
+    if(!_stored||!_stored.token){localStorage.removeItem('donna-user');setAuthChecked(true);return;}
+    fetch(API+'/api/auth/me',{headers:{Authorization:'Bearer '+_stored.token}})
+      .then(r=>r.ok?r.json():null)
+      .then(data=>{if(data){setLoggedIn(_stored);}else{localStorage.removeItem('donna-user');setLoggedIn(null);}})
+      .catch(()=>{setLoggedIn(_stored);}) // allow offline
+      .finally(()=>setAuthChecked(true));
+  },[]);
+  const [isDark,setIsDark]=useState(()=>localStorage.getItem('donna-theme')!=='light');
+  const [activeThread,setActiveThread]=useState('donna');
+  const [threads,setThreads]=useState(makeInitialThreads);
+  const [input,setInput]=useState('');
+  const [typing,setTyping]=useState(false);
+  const [activeTool,setActiveTool]=useState(null);
+  const [intervening,setIntervening]=useState(false);
+  const [customerFilter,setCustomerFilter]=useState('all');
+  const [statusData,setStatusData]=useState({donna_active:true,last_sync:'—',alerts:0,production_url:''});
+  const [liveCustomers,setLiveCustomers]=useState([]);
+  const [escalations,setEscalations]=useState([]);
+  const [liveCustomerMsgs,setLiveCustomerMsgs]=useState([]);
+  const [unreadCounts,setUnreadCounts]=useState({});
+  const prevMsgCountRef=useRef({});
+  // Mobile UI state
+  const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [toolsOpen,setToolsOpen]=useState(false);
+  const chatEndRef=useRef(null);
+  const msgIdRef=useRef(100);
+
+  useEffect(()=>{
+    document.documentElement.setAttribute('data-theme',isDark?'dark':'light');
+    localStorage.setItem('donna-theme',isDark?'dark':'light');
+  },[isDark]);
+
+  useEffect(()=>{setIntervening(false);},[activeThread]);
+
+  // Status poll
+  useEffect(()=>{
+    const load=()=>fetchApi('/api/status').then(d=>setStatusData(d)).catch(()=>{});
+    load();
+    const id=setInterval(load,60000);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // Customer list poll
+  useEffect(()=>{
+    const load=()=>{
+      fetchApi('/api/customers').then(d=>{
+        if(d&&d.customers) setLiveCustomers(d.customers.map(c=>({
+          id:c.phone_number,name:c.name||c.phone_number,company:c.company||'',
+          phone:c.phone_number,status:c.status_color||'green',
+          filter:c.escalation_status==='pending'||c.escalation_status==='taken'?'flagged':c.last_message?'active':'waiting',
+          lastMsg:c.last_message||'No messages yet',
+          lastTime:c.last_message_time?(c.last_message_time||'').slice(11,16):'',
+          flagReason:c.escalation_reason||'',
+        })));
+      }).catch(()=>{});
+      fetchApi('/api/escalations').then(d=>{if(d&&d.escalations)setEscalations(d.escalations);}).catch(()=>{});
+    };
+    load();
+    const id=setInterval(load,30000);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // Active customer conversation poll
+  useEffect(()=>{
+    if(!activeThread||!activeThread.startsWith('+')){setLiveCustomerMsgs([]);return;}
+    const load=()=>{
+      const enc=encodeURIComponent(activeThread);
+      fetchApi(`/api/customers/${enc}/conversation`).then(d=>{
+        if(d&&d.messages){
+          setLiveCustomerMsgs(d.messages.map((m,i)=>({
+            id:'cust_'+i,
+            from:m.direction==='inbound'?'customer':'donna',
+            text:m.message_content||'',
+            ts:(m.timestamp_saudi||m.timestamp||'').slice(11,16),
+            handled_by:m.handled_by,
+          })));
+          const cnt=d.messages.filter(m=>m.direction==='inbound').length;
+          const prev=prevMsgCountRef.current[activeThread]||0;
+          if(cnt>prev) setUnreadCounts(u=>({...u,[activeThread]:(u[activeThread]||0)+(cnt-prev)}));
+          prevMsgCountRef.current[activeThread]=cnt;
+        }
+      }).catch(()=>{});
+    };
+    load();
+    const id=setInterval(load,8000);
+    return ()=>clearInterval(id);
+  },[activeThread]);
+
+  useEffect(()=>{if(activeThread)setUnreadCounts(u=>({...u,[activeThread]:0}));},[activeThread]);
+  useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth',block:'end'});},[threads,typing,activeThread,liveCustomerMsgs]);
+
+  const handleLogin=user=>{localStorage.setItem('donna-user',JSON.stringify(user));setLoggedIn(user);};
+  const nowStr=()=>new Date(Date.now()+3*3600000).toISOString().slice(11,16);
+  const addMessage=useCallback((threadId,msg)=>{
+    setThreads(prev=>({...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]}));
+  },[]);
+
+  const isTeamThread=activeThread==='talha'||activeThread==='albaraa';
+  const isCustomerThread=liveCustomers.some(c=>c.id===activeThread);
+  const activeMember=TEAM.find(m=>m.id===activeThread);
+  const activeCustomer=liveCustomers.find(c=>c.id===activeThread);
+  const showReadOnly=(isTeamThread||isCustomerThread)&&!intervening;
+
+  const filterCounts=useMemo(()=>({
+    all:liveCustomers.length,
+    active:liveCustomers.filter(c=>c.filter==='active').length,
+    flagged:liveCustomers.filter(c=>c.filter==='flagged').length,
+    waiting:liveCustomers.filter(c=>c.filter==='waiting').length,
+  }),[liveCustomers]);
+
+  const filteredCustomers=useMemo(()=>
+    customerFilter==='all'?liveCustomers:liveCustomers.filter(c=>c.filter===customerFilter)
+  ,[customerFilter,liveCustomers]);
+
+  const handleSend=async()=>{
+    if(!input.trim())return;
+    const text=input.trim();
+    setInput('');
+    if((isCustomerThread||isTeamThread)&&intervening){
+      if(isCustomerThread&&activeCustomer){
+        try{
+          await fetchApi('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:activeCustomer.phone,message:text,intervention:true})});
+          const enc=encodeURIComponent(activeCustomer.phone);
+          await fetchApi(`/api/customers/${enc}/log-human-message`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,direction:'outbound',handled_by:'human'})});
+        }catch(e){console.warn('WA send failed:',e);}
+      }
+      addMessage(activeThread,{from:'donna',text,ts:nowStr(),asHuman:true});
+      return;
+    }
+    addMessage(activeThread,{from:'user',text,ts:nowStr()});
+    setTyping(true);
+    try{
+      const data=await fetchApi('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,thread:'admin'})});
+      setTyping(false);
+      addMessage(activeThread,{from:'donna',text:data.response||'Done.',ts:nowStr()});
+    }catch(e){
+      setTyping(false);
+      addMessage(activeThread,{from:'donna',text:`Error: ${e.message}`,ts:nowStr()});
+    }
+  };
+
+  const triggerTool=async toolId=>{
+    setToolsOpen(false);
+    if(activeThread!=='donna')setActiveThread('donna');
+    setActiveTool(toolId);
+    const label=TOOLS.flatMap(s=>s.items).find(i=>i.id===toolId)?.label||toolId;
+    addMessage('donna',{from:'user',text:`Running: **${label}**`,ts:nowStr()});
+    setTyping(true);
+    const def=TOOL_API_MAP[toolId];
+    if(!def){setTyping(false);return;}
+    if(!def.ep){
+      await new Promise(r=>setTimeout(r,300));
+      setTyping(false);
+      addMessage('donna',{from:'donna',text:typeof def.text==='function'?def.text(null):def.text,ts:nowStr(),apiToolId:toolId,apiData:null});
+      return;
+    }
+    try{
+      const data=await fetchApi(def.ep);
+      setTyping(false);
+      addMessage('donna',{from:'donna',text:typeof def.text==='function'?def.text(data):def.text,ts:nowStr(),apiToolId:toolId,apiData:data});
+    }catch(e){
+      setTyping(false);
+      addMessage('donna',{from:'donna',text:`Could not load **${label}**: ${e.message}`,ts:nowStr()});
+    }
+  };
+
+  const currentMsgs=threads[activeThread]||[];
+  let threadLabel='Donna — AI Assistant';
+  let threadSub='Powered by Claude';
+  if(activeMember){threadLabel=activeMember.name;threadSub=activeMember.status==='online'?'● Online':'● Away';}
+  else if(activeCustomer){threadLabel=activeCustomer.name;threadSub=activeCustomer.company+' · '+activeCustomer.phone;}
+
+  const prodUrl=(statusData.production_url||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'')||'helpdesk.botsolutions.tech';
+
+  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts};
+
+  if(!authChecked)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'var(--bg0)',color:'var(--text-3)',fontSize:13}}>Loading…</div>;
+  if(!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
+
+  const ToolsPanelContent=<>
+    <div style={{padding:'13px 16px 10px',borderBottom:'1px solid var(--border)',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div style={{fontSize:12,fontWeight:600,color:'var(--text-2)',letterSpacing:'0.06em',textTransform:'uppercase'}}>Tools</div>
+      <button onClick={()=>setToolsOpen(false)} className="mob-header-btn" style={{color:'var(--text-3)',background:'none',border:'none',cursor:'pointer',fontSize:18,lineHeight:1}}>✕</button>
+    </div>
+    <div style={{flex:1,overflowY:'auto',padding:'8px 8px',WebkitOverflowScrolling:'touch'}}>
+      {TOOLS.filter(s=>!s.adminOnly||(loggedIn&&loggedIn.role==='admin')).map(s=><ToolSection key={s.section} section={s.section} items={s.items} onTrigger={triggerTool} activeId={activeTool}/>)}
+    </div>
+  </>;
+
+  return <div className="app-shell">
+    {/* Mobile overlay */}
+    <div className={`overlay ${sidebarOpen||toolsOpen?'open':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(false);}}/>
+
+    <div className="app-body">
+      {/* Sidebar */}
+      <div className={`sidebar ${sidebarOpen?'open':''}`} id="sidebar-el">
+        <Sidebar {...sidebarProps}/>
+      </div>
+
+      {/* Main */}
+      <div className="main-area">
+        {/* Chat column */}
+        <div className="chat-col">
+          {/* Header */}
+          <div style={{padding:'11px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:'var(--bg1)',gap:10}}>
+            {/* Hamburger */}
+            <button className="mob-header-btn" onClick={()=>setSidebarOpen(o=>!o)} style={{width:34,height:34,borderRadius:7,background:'var(--bg2)',border:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4,flexShrink:0,cursor:'pointer',color:'var(--text-2)'}}>
+              <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
+              <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
+              <span style={{width:10,height:1.5,background:'currentColor',borderRadius:1,display:'block',alignSelf:'flex-start',marginLeft:2}}/>
+            </button>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadLabel}</div>
+              <div style={{fontSize:11,color:'var(--text-3)',marginTop:1,display:'flex',alignItems:'center',gap:6}}>
+                {activeCustomer&&<span style={{display:'inline-flex',alignItems:'center',gap:4,background:'#25d36620',color:'#25d366',borderRadius:4,padding:'1px 7px',fontSize:10,fontWeight:600}}>
+                  <svg width="9" height="9" viewBox="0 0 14 14" fill="none"><path d="M7 1C3.7 1 1 3.7 1 7c0 1.1.3 2.1.9 3L1 13l3.2-.9C5.3 12.7 6.1 13 7 13c3.3 0 6-2.7 6-6S10.3 1 7 1Z" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>WhatsApp
+                </span>}
+                <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadSub}</span>
+              </div>
+            </div>
+            <div className="header-user-pill" style={{display:'flex',alignItems:'center',gap:7,padding:'5px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,flexShrink:0}}>
+              <div style={{width:22,height:22,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:'var(--teal)'}}>{loggedIn.initials}</div>
+              <div style={{fontSize:11,fontWeight:600,color:'var(--text-1)'}}>{loggedIn.name}</div>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div style={{flex:1,overflowY:'auto',padding:'16px 16px 8px',WebkitOverflowScrolling:'touch'}}>
+            {isCustomerThread&&intervening&&<div style={{margin:'0 0 16px',padding:'10px 14px',background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.25)',borderRadius:8,display:'flex',alignItems:'center',gap:8,fontSize:12}}>
+              <span>👤</span><span style={{color:'var(--amber)',fontWeight:500}}>Human agent mode — Donna paused</span>
+            </div>}
+            {isCustomerThread
+              ?liveCustomerMsgs.map(msg=><ChatMessage key={msg.id} msg={msg} isCustomerThread={true}/>)
+              :currentMsgs.map(msg=><ChatMessage key={msg.id} msg={msg} isCustomerThread={false}/>)}
+            {typing&&<TypingIndicator/>}
+            <div ref={chatEndRef}/>
+          </div>
+
+          {/* Input */}
+          {showReadOnly?(
+            <div style={{padding:'12px 16px',borderTop:'1px solid var(--border)',background:'var(--bg1)',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+              <div style={{flex:1,padding:'10px 14px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,fontSize:12,color:'var(--text-3)',display:'flex',alignItems:'center',gap:6}}>
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" style={{flexShrink:0}}><rect x="2" y="6" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/><path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+                {isCustomerThread?<span>Donna handling this · tap Intervene to take over</span>:<span>Read-only — Donna's view</span>}
+              </div>
+              <button onClick={async()=>{
+                if(isCustomerThread){
+                  const esc=escalations.find(e=>e.phone_number===activeThread);
+                  if(esc){try{await fetchApi(`/api/escalations/${esc.id}/take`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_name:loggedIn.name||'Admin'})});}catch(e){console.warn(e);}}
+                }
+                setIntervening(true);
+              }} style={{padding:'10px 14px',background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.3)',borderRadius:9,fontSize:12,fontWeight:600,color:'var(--amber)',cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}}>
+                Intervene
+              </button>
+            </div>
+          ):(
+            <div style={{padding:'12px 16px',borderTop:'1px solid var(--border)',background:'var(--bg1)',flexShrink:0}}>
+              {intervening&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,padding:'6px 10px',background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.25)',borderRadius:7}}>
+                <span style={{fontSize:11,color:'var(--amber)'}}>⚡ {isCustomerThread?`Replying as human to ${activeCustomer?.name}`:'Intervening as Donna'}</span>
+                <button onClick={()=>setIntervening(false)} style={{fontSize:11,color:'var(--amber)',cursor:'pointer',background:'none',border:'none'}}>Cancel</button>
+              </div>}
+              <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
+                <textarea value={input} onChange={e=>setInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}}}
+                  placeholder={isCustomerThread&&intervening?`Reply to ${activeCustomer?.name}...`:'Ask Donna anything...'}
+                  rows={1}
+                  style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,padding:'11px 14px',color:'var(--text-1)',fontSize:14,resize:'none',outline:'none',lineHeight:1.5,fontFamily:'var(--sans)',transition:'border-color 0.15s'}}
+                  onFocus={e=>e.target.style.borderColor='var(--teal)'}
+                  onBlur={e=>e.target.style.borderColor='var(--border)'}/>
+                <button onClick={handleSend} style={{width:40,height:40,borderRadius:9,background:intervening?'var(--amber)':'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,opacity:input.trim()?1:0.5,transition:'opacity 0.15s',border:'none',cursor:'pointer'}}>
+                  <svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M1 7L13 7M13 7L8 2M13 7L8 12" stroke="#000" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+              </div>
+              <div style={{fontSize:10,color:'var(--text-3)',marginTop:5,paddingLeft:2}}>Enter to send · Shift+Enter for new line</div>
+            </div>
+          )}
+        </div>
+
+        {/* Tools panel — desktop only */}
+        <div className={`tools-panel ${toolsOpen?'open':''}`}>
+          {ToolsPanelContent}
+        </div>
+      </div>
+    </div>
+
+    {/* Status bar — desktop only */}
+    <div className="status-bar" style={{height:28,flexShrink:0,background:'var(--bg1)',borderTop:'1px solid var(--border)',display:'flex',alignItems:'center',paddingLeft:16,paddingRight:16,fontSize:11,fontFamily:'var(--mono)',color:'var(--text-3)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:5}}>
+        <span style={{width:6,height:6,borderRadius:'50%',background:statusData.donna_active?'var(--green)':'var(--amber)',display:'inline-block',boxShadow:statusData.donna_active?'0 0 4px var(--green)':'none'}}/>
+        <span style={{color:'var(--text-2)'}}>Donna {statusData.donna_active?'active':'offline'}</span>
+      </div>
+      <Divider/><span>Sync: <span style={{color:'var(--text-2)'}}>{statusData.last_sync||'—'}</span></span>
+      <Divider/><span><span style={{color:'var(--teal)'}}>{prodUrl}</span></span>
+      <Divider/>
+      {statusData.alerts>0
+        ?<span style={{color:'var(--red)'}}>{statusData.alerts} alert{statusData.alerts!==1?'s':''}</span>
+        :<span style={{color:'var(--green)'}}>All clear</span>}
+      <div style={{flex:1}}/>
+      <span>{new Date(Date.now()+3*3600000).toISOString().slice(0,16).replace('T',' ')} KSA</span>
+    </div>
+
+    {/* Mobile bottom nav */}
+    <div className="mob-nav">
+      <button className={`mob-nav-btn ${activeThread==='donna'&&!sidebarOpen&&!toolsOpen?'active':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(false);setActiveThread('donna');}}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.8"/><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" opacity="0.5"/></svg>
+        Donna
+      </button>
+      <button className={`mob-nav-btn ${sidebarOpen?'active':''}`} onClick={()=>{setToolsOpen(false);setSidebarOpen(o=>!o);}}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.8"/><circle cx="9" cy="16" r="3" stroke="currentColor" strokeWidth="1.8"/><circle cx="17" cy="12" r="3" stroke="currentColor" strokeWidth="1.8"/></svg>
+        Chats
+        {Object.values(unreadCounts).some(v=>v>0)&&<span style={{position:'absolute',top:6,right:'calc(25% - 6px)',width:8,height:8,borderRadius:'50%',background:'var(--teal)',border:'2px solid var(--bg1)'}}/>}
+      </button>
+      <button className={`mob-nav-btn ${toolsOpen?'active':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(o=>!o);}}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/></svg>
+        Tools
+      </button>
+      <button className={`mob-nav-btn`} onClick={()=>{const _s=localStorage.getItem('donna-user');if(_s){const _t=JSON.parse(_s).token;if(_t)fetch(API+'/api/auth/logout-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_t})}).catch(()=>{});}localStorage.removeItem('donna-user');window.location.reload();}}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+        {loggedIn.initials}
+      </button>
+    </div>
+  </div>;
+}
+
+class ErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={error:null};}
+  static getDerivedStateFromError(e){return{error:e};}
+  render(){
+    if(this.state.error) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',background:'#060d1a',color:'#f25c54',flexDirection:'column',gap:12,padding:24,textAlign:'center'}}>
+      <div style={{fontSize:24}}>⚠</div>
+      <div style={{fontSize:14,fontWeight:600}}>Donna encountered an error</div>
+      <div style={{fontSize:12,color:'#7a96b8',maxWidth:400}}>{this.state.error.message}</div>
+      <button onClick={()=>window.location.reload()} style={{marginTop:8,padding:'10px 20px',background:'#0ec4b4',color:'#000',borderRadius:8,fontSize:14,fontWeight:600,cursor:'pointer',border:'none'}}>Reload</button>
+    </div>;
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ErrorBoundary><App/></ErrorBoundary>
+);
+</script>
+</body>
+</html>
