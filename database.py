@@ -180,15 +180,6 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_pc_number ON pending_context(team_member_number);
 
-            CREATE TABLE IF NOT EXISTS pending_context (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                team_member_number TEXT NOT NULL,
-                ticket_id TEXT NOT NULL,
-                message_sent TEXT NOT NULL,
-                sent_at TEXT DEFAULT (datetime('now')),
-                context_resolved INTEGER DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_pc_number ON pending_context(team_member_number);
 
             CREATE TABLE IF NOT EXISTS whatsapp_conversations (
                 contact_number TEXT PRIMARY KEY,

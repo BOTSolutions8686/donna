@@ -114,9 +114,10 @@ const fetchApi=authFetch;
 
 // ─── STATIC DATA ──────────────────────────────────────────────────────────────
 const TEAM=[
-  {id:'talha',  name:'Talha',   role:'Project Lead',   status:'online',avatar:'T'},
-  {id:'albaraa',name:'Al Baraa',role:'Implementation', status:'away',  avatar:'A'},
+  {id:'talha',  name:'Talha',      role:'Project Lead',   status:'online',avatar:'T',whatsapp:'+966546065347'},
+  {id:'albaraa',name:'Al Baraa',   role:'Implementation', status:'away',  avatar:'A',whatsapp:'+966544272725'},
 ];
+const TEAM_ID_MAP={'talha':'Talha','albaraa':'Al Baraa'};
 
 const TOOLS=[
   {section:'Financial',adminOnly:true,items:[
@@ -639,6 +640,28 @@ function App(){
     return ()=>clearInterval(id);
   },[activeThread]);
 
+  // Active team conversation poll (10s interval)
+  useEffect(()=>{
+    if(!activeThread||!TEAM_ID_MAP[activeThread])return;
+    const memberName=TEAM_ID_MAP[activeThread];
+    const load=()=>{
+      authFetch(`/api/team/conversations/${encodeURIComponent(memberName)}`)
+        .then(d=>{
+          if(d&&d.messages&&d.messages.length>0){
+            setThreads(prev=>({...prev,[activeThread]:d.messages.map((m,i)=>({
+              id:'team_'+i,
+              from:m.direction==='outbound'?'donna':'user',
+              text:m.message_content||'',
+              ts:(m.timestamp||'').slice(11,16),
+            }))}));
+          }
+        }).catch(()=>{});
+    };
+    load();
+    const id=setInterval(load,10000);
+    return ()=>clearInterval(id);
+  },[activeThread]);
+
   useEffect(()=>{if(activeThread)setUnreadCounts(u=>({...u,[activeThread]:0}));},[activeThread]);
   useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth',block:'end'});},[threads,typing,activeThread,liveCustomerMsgs]);
 
@@ -648,7 +671,7 @@ function App(){
     setThreads(prev=>({...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]}));
   },[]);
 
-  const isTeamThread=activeThread==='talha'||activeThread==='albaraa';
+  const isTeamThread=!!TEAM_ID_MAP[activeThread];
   const isCustomerThread=liveCustomers.some(c=>c.id===activeThread);
   const activeMember=TEAM.find(m=>m.id===activeThread);
   const activeCustomer=liveCustomers.find(c=>c.id===activeThread);
@@ -672,10 +695,14 @@ function App(){
     if((isCustomerThread||isTeamThread)&&intervening){
       if(isCustomerThread&&activeCustomer){
         try{
-          await fetchApi('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:activeCustomer.phone,message:text,intervention:true})});
+          await authFetch('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:activeCustomer.phone,message:text,intervention:true})});
           const enc=encodeURIComponent(activeCustomer.phone);
-          await fetchApi(`/api/customers/${enc}/log-human-message`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,direction:'outbound',handled_by:'human'})});
+          await authFetch(`/api/customers/${enc}/log-human-message`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,direction:'outbound',handled_by:'human'})});
         }catch(e){console.warn('WA send failed:',e);}
+      }else if(isTeamThread&&activeMember&&activeMember.whatsapp){
+        try{
+          await authFetch('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:activeMember.whatsapp,message:text,intervention:true})});
+        }catch(e){console.warn('Team WA send failed:',e);}
       }
       addMessage(activeThread,{from:'donna',text,ts:nowStr(),asHuman:true});
       return;

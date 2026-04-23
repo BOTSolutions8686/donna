@@ -450,10 +450,18 @@ async def send_email_api(body: SendEmailBody):
 async def get_member_conversations(member_id: str):
     member_wa = None
     member_display = member_id
-    for m in CONFIG.get("team_members", []):
-        if member_id.lower() in m.get("name", "").lower() or m.get("whatsapp", "") == member_id:
-            member_wa = m.get("whatsapp")
-            member_display = m.get("name", member_id)
+    # Search team_members first, then whatsapp_whitelist (covers admin like Talha)
+    all_contacts = (
+        CONFIG.get("team_members", []) +
+        [{"name": w.get("name", ""), "whatsapp": w.get("number", "")}
+         for w in CONFIG.get("communication", {}).get("whatsapp_whitelist", [])]
+    )
+    for m in all_contacts:
+        name = m.get("name", "")
+        wa = m.get("whatsapp", "")
+        if member_id.lower() in name.lower() or wa == member_id:
+            member_wa = wa
+            member_display = name or member_id
             break
     if not member_wa and member_id.startswith("+"):
         member_wa = member_id
