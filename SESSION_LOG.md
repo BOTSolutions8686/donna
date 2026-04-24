@@ -576,3 +576,74 @@ call entirely and continues.
 
 **Verified:** Test webhook call → `WhatsApp in from Abdul Malik` logged at 15:21:42,
 `WhatsApp reply sent` at 15:21:45 — **3 seconds end-to-end**.
+
+---
+
+## Session: 2026-04-24 — EOD Report System + SSL + PWA
+
+### EOD Daily Report System
+
+**database.py:**
+- Added `daily_reports` table — stores member name, date, summarized report
+- Added `eod_session_state` table — tracks active collection conversations
+- Added 6 helpers: `get_eod_session`, `set_eod_session`, `clear_eod_session`,
+  `save_daily_report`, `get_daily_reports`, `get_member_report_history`
+
+**cloud_agent.py:**
+- `_build_eod_opener()` — opener message for check-in
+- `_handle_eod_conversation()` — intercepts WhatsApp replies during active EOD session,
+  runs 2-turn Claude Haiku collection, finalizes when done
+- `_finalize_eod_report()` — summarizes transcript into bullets, saves to DB
+- `job_eod_report_request` — **16:45 KSA (13:45 UTC)**: sends opener to all team members
+- `job_eod_summary` — **18:30 KSA (15:30 UTC)**: compiles digest, sends to admin WhatsApp
+- `get_eod_reports` tool — Talha can ask "show today's EOD reports" in Telegram
+
+**web_api.py + Donna.html:**
+- `GET /api/reports/daily?date=YYYY-MM-DD` — today's reports
+- `GET /api/reports/member/{whatsapp}` — per-member history (last 10)
+- `ReportsSection` collapsible in sidebar below Team
+- `ReportDetailPanel` — clicking a member shows full report history with dates
+
+### STEP 1: SSL via Caddy
+
+Installed Caddy v2.11.2 on server. Configured reverse proxy for
+`donna.botsolutions.tech` with automatic Let's Encrypt SSL (HTTP-01 challenge).
+Opened ports 80/443. Certificate provisioned automatically on first start.
+
+**Verified:** `https://donna.botsolutions.tech/` returns HTTP 200. HSTS,
+X-Content-Type-Options, X-Frame-Options, Referrer-Policy headers all active.
+
+### STEP 2–4: PWA Manifest + Service Worker + Icons
+
+- `/manifest.json` — installable app definition (name, icons, theme, standalone display)
+- `/sw.js` — cache-first SW, API calls network-first, offline fallback to cached shell
+- `/icon.svg` — dark rounded-rect with teal "D" glyph
+- `/icon-192.png` — redirects to SVG
+- All PWA meta tags added to `<head>`: apple-mobile-web-app-capable,
+  apple-mobile-web-app-status-bar-style, theme-color, manifest link, apple-touch-icon
+- SW registered in `window.load` event
+
+**To install on iPhone:** Safari → `https://donna.botsolutions.tech` → Share → Add to Home Screen
+
+### STEP 5: Mobile CSS Overhaul
+
+- Safe area insets (`env(safe-area-inset-bottom)`) for notch/home indicator devices
+- Sidebar: cubic-bezier(0.4,0,0.2,1) smooth slide-in, max-width 320px cap
+- Tools panel: bottom sheet, 75vh/600px max, cubic-bezier transitions
+- Bottom nav: proper padding for home indicator bar
+- Input area: `padding-bottom: calc(8px + env(safe-area-inset-bottom))`
+
+### STEP 6: Back Button + Tools Drag Handle
+
+- `isMobile` state (window.innerWidth <= 768) with resize listener
+- Header button: shows "← Back" when on mobile AND in a non-Donna thread;
+  otherwise shows hamburger
+- Tools panel: drag handle pill at top (tap to close)
+
+### NEXT
+
+Test on real iPhone/Android:
+1. Go to `https://donna.botsolutions.tech` in Safari
+2. Share → Add to Home Screen
+3. Verify: standalone display, teal status bar, safe area padding, back button
+

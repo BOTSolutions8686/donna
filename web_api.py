@@ -13,7 +13,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -101,6 +101,77 @@ class LoginBody(BaseModel):
     username: str
     password: str
 
+
+
+# ── PWA static assets ─────────────────────────────────────────────────────────
+
+@app.get("/manifest.json")
+async def serve_manifest():
+    manifest = {
+        "name": "Donna — Operations AI",
+        "short_name": "Donna",
+        "description": "BOT Solutions Operations AI Dashboard",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#060d1a",
+        "theme_color": "#0ec4b4",
+        "orientation": "portrait-primary",
+        "icons": [
+            {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+        ],
+        "categories": ["business", "productivity"],
+        "lang": "en",
+        "scope": "/",
+    }
+    return JSONResponse(manifest, headers={
+        "Content-Type": "application/manifest+json",
+        "Cache-Control": "public, max-age=3600",
+    })
+
+
+@app.get("/sw.js")
+async def serve_sw():
+    sw = """const CACHE='donna-v2';
+const SHELL=['/'];
+self.addEventListener('install',e=>{
+  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));
+});
+self.addEventListener('activate',e=>{
+  e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
+});
+self.addEventListener('fetch',e=>{
+  const u=e.request.url;
+  if(u.includes('/api/')||u.includes('/auth')){
+    e.respondWith(fetch(e.request).catch(()=>new Response(JSON.stringify({error:'offline'}),{headers:{'Content-Type':'application/json'}})));
+    return;
+  }
+  e.respondWith(fetch(e.request).then(r=>{
+    if(r&&r.ok&&r.type==='basic'){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c));}
+    return r;
+  }).catch(()=>caches.match(e.request).then(r=>r||caches.match('/'))));
+});"""
+    return Response(sw, media_type="application/javascript", headers={
+        "Cache-Control": "no-cache, no-store",
+    })
+
+
+@app.get("/icon.svg")
+async def serve_icon_svg():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<rect width="100" height="100" rx="22" fill="#060d1a"/>
+<circle cx="50" cy="50" r="30" fill="none" stroke="#0ec4b4" stroke-width="5.5"/>
+<text x="50" y="56" text-anchor="middle" font-family="system-ui,sans-serif"
+  font-weight="700" font-size="34" fill="#0ec4b4">D</text>
+</svg>"""
+    return Response(svg, media_type="image/svg+xml", headers={
+        "Cache-Control": "public, max-age=86400",
+    })
+
+
+@app.get("/icon-192.png")
+async def serve_icon_192():
+    return RedirectResponse("/icon.svg")
 
 @app.post("/api/auth/login")
 async def login(body: LoginBody):

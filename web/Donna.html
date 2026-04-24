@@ -2,7 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Donna"/>
+<meta name="theme-color" content="#0ec4b4" media="(prefers-color-scheme: dark)"/>
+<meta name="theme-color" content="#0ec4b4" media="(prefers-color-scheme: light)"/>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="apple-touch-icon" href="/icon.svg"/>
+<link rel="icon" type="image/svg+xml" href="/icon.svg"/>
 <title>Donna — Operations</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
@@ -56,35 +65,70 @@ input,textarea{font-family:var(--sans);}
 
 /* ── MOBILE layout (≤768px) ── */
 @media(max-width:768px){
-  :root{--sidebar-w:85vw;--tools-w:100vw;}
+  :root{--sidebar-w:88vw;--tools-w:100vw;}
 
+  /* Sidebar — full height slide-in drawer */
   .sidebar{
-    position:fixed;top:0;left:0;height:100%;width:var(--sidebar-w);z-index:300;
-    transform:translateX(-100%);box-shadow:4px 0 24px rgba(0,0,0,0.5);
+    position:fixed;top:0;left:0;height:100%;
+    width:var(--sidebar-w);max-width:320px;
+    z-index:300;overflow-y:auto;
+    transform:translateX(-110%);
+    transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    box-shadow:4px 0 40px rgba(0,0,0,0.7);
   }
-  .sidebar.open{transform:translateX(0);animation:slideIn 0.25s ease;}
+  .sidebar.open{transform:translateX(0);}
   .overlay.open{display:block;}
   .mob-header-btn{display:flex;}
+
+  /* Tools panel — bottom sheet */
   .tools-panel{
     position:fixed;bottom:0;left:0;right:0;z-index:250;
-    height:70vh;border-radius:16px 16px 0 0;border-top:1px solid var(--border);
-    transform:translateY(100%);transition:transform 0.3s ease;
+    height:75vh;max-height:600px;
+    border-radius:20px 20px 0 0;
+    border-top:1px solid var(--border-hi);
+    transform:translateY(110%);
+    transition:transform 0.32s cubic-bezier(0.4,0,0.2,1);
+    background:var(--bg1);overflow:hidden;
+    display:flex;flex-direction:column;
   }
   .tools-panel.open{transform:translateY(0);}
+
+  /* Bottom nav bar */
   .mob-nav{
-    display:flex;height:56px;flex-shrink:0;background:var(--bg1);border-top:1px solid var(--border);
+    display:flex;height:56px;flex-shrink:0;
+    background:var(--bg1);border-top:1px solid var(--border);
     align-items:stretch;z-index:100;
+    padding-bottom:env(safe-area-inset-bottom,0px);
   }
   .mob-nav-btn{
-    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    gap:3px;font-size:10px;color:var(--text-3);cursor:pointer;border:none;background:none;
-    transition:color 0.15s;padding:4px 0;
+    flex:1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:3px;font-size:10px;
+    color:var(--text-3);cursor:pointer;border:none;background:none;
+    padding:8px 4px;transition:color 0.15s;-webkit-tap-highlight-color:transparent;
   }
   .mob-nav-btn.active{color:var(--teal);}
-  .chat-col{border-right:none;}
-  .app-body{flex-direction:column;}
-  .status-bar{display:none;}
-  .header-user-pill{display:none;}
+
+  /* Chat messages — more padding on mobile */
+  .chat-messages{padding:12px 8px 12px;}
+  .msg-bubble{max-width:90%;}
+
+  /* Input area — respect safe area */
+  .chat-input-area{
+    padding:8px;
+    padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));
+  }
+
+  /* Status bar */
+  .status-bar{padding:4px 10px;font-size:10px;}
+
+  /* Header */
+  .app-header{padding:0 10px;}
+}
+
+/* Notch / home indicator safe area */
+@supports(padding: env(safe-area-inset-bottom)){
+  .mob-nav{padding-bottom:env(safe-area-inset-bottom);}
+  .chat-input-area{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
 }
 
 /* ── TABLET (769px – 1024px) ── */
@@ -643,6 +687,12 @@ function App(){
   const prevMsgCountRef=useRef({});
   // Mobile UI state
   const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [isMobile,setIsMobile]=React.useState(()=>window.innerWidth<=768);
+  React.useEffect(()=>{
+    const h=()=>setIsMobile(window.innerWidth<=768);
+    window.addEventListener('resize',h,{passive:true});
+    return ()=>window.removeEventListener('resize',h);
+  },[]);
   const [toolsOpen,setToolsOpen]=useState(false);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
@@ -899,12 +949,26 @@ function App(){
         <div className="chat-col">
           {/* Header */}
           <div style={{padding:'11px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:'var(--bg1)',gap:10}}>
-            {/* Hamburger */}
-            <button className="mob-header-btn" onClick={()=>setSidebarOpen(o=>!o)} style={{width:34,height:34,borderRadius:7,background:'var(--bg2)',border:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4,flexShrink:0,cursor:'pointer',color:'var(--text-2)'}}>
-              <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
-              <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
-              <span style={{width:10,height:1.5,background:'currentColor',borderRadius:1,display:'block',alignSelf:'flex-start',marginLeft:2}}/>
-            </button>
+            {/* Hamburger / Back button */}
+            {isMobile && activeThread && activeThread !== 'donna' ? (
+              <button onClick={()=>setActiveThread('donna')} style={{
+                display:'flex',alignItems:'center',gap:5,padding:'6px 8px',
+                color:'var(--text-2)',background:'none',border:'none',cursor:'pointer',
+                flexShrink:0,WebkitTapHighlightColor:'transparent'
+              }}>
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M11 4L6 9L11 14" stroke="currentColor" strokeWidth="1.8"
+                    strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <span style={{fontSize:13,color:'var(--text-2)'}}>Back</span>
+              </button>
+            ) : (
+              <button className="mob-header-btn" onClick={()=>setSidebarOpen(o=>!o)} style={{width:34,height:34,borderRadius:7,background:'var(--bg2)',border:'1px solid var(--border)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4,flexShrink:0,cursor:'pointer',color:'var(--text-2)'}}>
+                <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
+                <span style={{width:14,height:1.5,background:'currentColor',borderRadius:1,display:'block'}}/>
+                <span style={{width:10,height:1.5,background:'currentColor',borderRadius:1,display:'block',alignSelf:'flex-start',marginLeft:2}}/>
+              </button>
+            )}
             <div style={{minWidth:0,flex:1}}>
               <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadLabel}</div>
               <div style={{fontSize:11,color:'var(--text-3)',marginTop:1,display:'flex',alignItems:'center',gap:6}}>
@@ -975,6 +1039,13 @@ function App(){
 
         {/* Tools panel — desktop only */}
         <div className={`tools-panel ${toolsOpen?'open':''}`}>
+          {/* Mobile drag handle */}
+          <div onClick={()=>setToolsOpen(false)} style={{
+            display:'flex',justifyContent:'center',alignItems:'center',
+            padding:'10px 0 6px',cursor:'pointer',flexShrink:0
+          }}>
+            <div style={{width:36,height:4,borderRadius:2,background:'var(--border-hi)'}}/>
+          </div>
           {ToolsPanelContent}
         </div>
       </div>
@@ -1036,6 +1107,15 @@ class ErrorBoundary extends React.Component{
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary><App/></ErrorBoundary>
 );
+
+// PWA Service Worker registration
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/sw.js',{scope:'/'})
+      .then(r=>console.log('Donna SW:',r.scope))
+      .catch(e=>console.warn('SW failed:',e));
+  });
+}
 </script>
 </body>
 </html>
