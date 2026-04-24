@@ -170,6 +170,25 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_tc_number ON team_conversations(whatsapp_number);
             CREATE INDEX IF NOT EXISTS idx_tc_ts ON team_conversations(timestamp);
 
+            CREATE TABLE IF NOT EXISTS daily_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                whatsapp_number TEXT NOT NULL,
+                member_name TEXT NOT NULL,
+                report_date TEXT NOT NULL,
+                report_text TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_dr_number ON daily_reports(whatsapp_number);
+            CREATE INDEX IF NOT EXISTS idx_dr_date ON daily_reports(report_date);
+
+            CREATE TABLE IF NOT EXISTS eod_session_state (
+                whatsapp_number TEXT PRIMARY KEY,
+                state TEXT NOT NULL DEFAULT 'idle',
+                transcript TEXT NOT NULL DEFAULT '',
+                started_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS pending_context (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_member_number TEXT NOT NULL,
@@ -1511,3 +1530,73 @@ def cleanup_expired_sessions():
     """Remove sessions older than their expiry."""
     with _conn() as conn:
         conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+
+# ── EOD report helpers ────────────────────────────────────────────────────────
+
+def get_eod_session(whatsapp_number: str):
+    """Return current EOD session state dict or None."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM eod_session_state WHERE whatsapp_number=?",
+            (whatsapp_number,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_eod_session(whatsapp_number: str, state: str, transcript: str):
+    """Upsert EOD session state for a team member."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO eod_session_state (whatsapp_number, state, transcript, updated_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(whatsapp_number) DO UPDATE SET
+                   state=excluded.state,
+                   transcript=excluded.transcript,
+                   updated_at=excluded.updated_at""",
+            (whatsapp_number, state, transcript),
+        )
+
+
+def clear_eod_session(whatsapp_number: str):
+    """Remove EOD session (reset to idle)."""
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM eod_session_state WHERE whatsapp_number=?",
+            (whatsapp_number,),
+        )
+
+
+def save_daily_report(whatsapp_number: str, member_name: str, report_date: str, report_text: str):
+    """Persist a completed EOD report."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO daily_reports (whatsapp_number, member_name, report_date, report_text)
+               VALUES (?, ?, ?, ?)""",
+            (whatsapp_number, member_name, report_date, report_text),
+        )
+
+
+def get_daily_reports(report_date: str = None, limit: int = 50):
+    """Return daily reports, optionally filtered by date."""
+    with _conn() as conn:
+        if report_date:
+            rows = conn.execute(
+                "SELECT * FROM daily_reports WHERE report_date=? ORDER BY created_at DESC LIMIT ?",
+                (report_date, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM daily_reports ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_member_report_history(whatsapp_number: str, limit: int = 10):
+    """Return recent EOD reports for a specific team member."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM daily_reports WHERE whatsapp_number=? ORDER BY report_date DESC LIMIT ?",
+            (whatsapp_number, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]

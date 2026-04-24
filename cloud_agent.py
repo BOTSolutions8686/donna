@@ -282,6 +282,17 @@ def _build_image_content(img_bytes: bytes, media_type: str = "image/jpeg", capti
 
 TOOLS = [
     {
+        "name": "get_eod_reports",
+        "description": "Get today's end-of-day reports from team members.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "report_date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today."}
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_overdue_invoices",
         "description": "Get all overdue Sales Invoices with customer, amount, and due date.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -2889,6 +2900,19 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None):
                 return "Could not read file %s -- empty or unsupported format." % file_id
             return content[:8000]
 
+        elif name == "get_eod_reports":
+            from datetime import date
+            report_date = inputs.get("report_date", date.today().isoformat())
+            reports = db.get_daily_reports(report_date=report_date)
+            if not reports:
+                return f"No EOD reports yet for {report_date}."
+            lines = [f"EOD Reports — {report_date} ({len(reports)} member(s)):\n"]
+            for r in reports:
+                lines.append(f"── {r['member_name']} ──")
+                lines.append(r['report_text'])
+                lines.append("")
+            return "\n".join(lines)
+
         else:
             db.add_suggestion(
                 description=f"New tool capability needed: '{name}'",
@@ -3112,6 +3136,159 @@ def should_escalate_immediately(message: str) -> tuple:
 
 # ── Team message handler (ticket-only) ───────────────────────────────────────
 
+# ── EOD daily report collection ──────────────────────────────────────────────
+
+def _build_eod_opener(member_name: str) -> str:
+    """Return the opening question for an EOD check-in."""
+    return (
+        f"Hey {member_name.split()[0]}! End of day check-in 🌙\n\n"
+        "What did you work on today? Just give me a quick rundown — "
+        "key tasks completed, anything in progress, blockers if any."
+    )
+
+
+async def _handle_eod_conversation(sender_number: str, sender_name: str, message: str) -> str | None:
+    """
+    Handle an in-progress EOD collection conversation.
+    Returns a reply string if in EOD mode, or None if not in EOD mode.
+    """
+    session = db.get_eod_session(sender_number)
+    if not session or session.get('state') == 'idle':
+        return None
+
+    state = session['state']
+    transcript = session.get('transcript', '')
+
+    # Append user message to transcript
+    transcript += f"\nTeam: {message}"
+
+    if state == 'collecting':
+        # Ask a follow-up or wrap up
+        import anthropic as _ant
+        try:
+            ant_client = _ant.Anthropic(api_key=CONFIG['anthropic']['api_key'])
+            system_prompt = (
+                "You are Donna, collecting an end-of-day report from a BOT Solutions team member via WhatsApp.\n"
+                "Your job is to collect a brief but complete EOD update.\n\n"
+                "After the team member gives their first response, ask ONE follow-up question if needed "
+                "(e.g. any blockers? anything for tomorrow?). Then say:\n"
+                "'Got it, thanks! I'll include this in today\'s summary.'\n\n"
+                "Rules:\n"
+                "- Max 2 exchanges total (opener + 1 follow-up)\n"
+                "- Keep messages SHORT — 1-2 sentences\n"
+                "- No markdown, plain text\n"
+                "- Once done, end with exactly: REPORT_COMPLETE\n\n"
+                f"Conversation so far:\n{transcript}"
+            )
+            resp = ant_client.messages.create(
+                model='claude-haiku-4-5-20251001',
+                max_tokens=150,
+                messages=[{'role': 'user', 'content': 'Generate your next message to the team member.'}],
+                system=system_prompt,
+            )
+            reply_text = resp.content[0].text.strip()
+        except Exception as e:
+            log.warning('EOD conversation Claude call failed: %s', e)
+            reply_text = "Got it, thanks! I'll include this in today's summary. REPORT_COMPLETE"
+
+        if 'REPORT_COMPLETE' in reply_text:
+            reply_text = reply_text.replace('REPORT_COMPLETE', '').strip()
+            # Finalize the report
+            await _finalize_eod_report(sender_number, sender_name, transcript + f"\nDonna: {reply_text}")
+            db.clear_eod_session(sender_number)
+            return reply_text or "Thanks! Report saved. Have a good evening!"
+        else:
+            db.set_eod_session(sender_number, 'collecting', transcript + f"\nDonna: {reply_text}")
+            return reply_text
+
+    return None
+
+
+async def _finalize_eod_report(sender_number: str, sender_name: str, transcript: str):
+    """Summarize the EOD conversation and save as a daily report."""
+    from datetime import date
+    import anthropic as _ant
+
+    today = date.today().isoformat()
+    try:
+        ant_client = _ant.Anthropic(api_key=CONFIG['anthropic']['api_key'])
+        resp = ant_client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=300,
+            system=(
+                "You are summarizing a WhatsApp EOD check-in for internal records.\n"
+                "Write a clean, structured summary in 3-5 bullet points covering:\n"
+                "- Tasks completed\n"
+                "- Work in progress\n"
+                "- Blockers (if any)\n"
+                "- Plans for tomorrow (if mentioned)\n"
+                "No intro, no fluff — bullets only. Plain text."
+            ),
+            messages=[{'role': 'user', 'content': f"EOD conversation:\n{transcript}"}],
+        )
+        summary = resp.content[0].text.strip()
+    except Exception as e:
+        log.warning('EOD finalize summary failed: %s', e)
+        summary = transcript  # fallback: save raw transcript
+
+    db.save_daily_report(sender_number, sender_name, today, summary)
+    log.info('EOD report saved for %s on %s', sender_name, today)
+
+
+async def job_eod_report_request(app):
+    """16:45 KSA (13:45 UTC) — Ask all team members for their EOD update."""
+    members = CONFIG.get('team_members', [])
+    for m in members:
+        wa = m.get('whatsapp', '')
+        name = m.get('name', 'Team')
+        if not wa:
+            continue
+        try:
+            opener = _build_eod_opener(name)
+            db.set_eod_session(wa, 'collecting', f"Donna: {opener}")
+            erp.send_whatsapp(wa, opener)
+            db.log_team_conversation(name, wa, 'outbound', opener)
+            log.info('EOD check-in sent to %s', name)
+        except Exception as e:
+            log.error('EOD request failed for %s: %s', name, e)
+
+
+async def job_eod_summary(app):
+    """18:30 KSA (15:30 UTC) — Post EOD summary digest to Talha."""
+    from datetime import date
+    import anthropic as _ant
+
+    today = date.today().isoformat()
+    reports = db.get_daily_reports(report_date=today)
+    if not reports:
+        log.info('EOD summary: no reports collected for %s', today)
+        return
+
+    # Clear any still-open sessions
+    for r in reports:
+        db.clear_eod_session(r['whatsapp_number'])
+
+    # Build digest
+    digest_parts = [f"📋 *EOD Summary — {today}*\n"]
+    for r in reports:
+        digest_parts.append(f"*{r['member_name']}*")
+        digest_parts.append(r['report_text'])
+        digest_parts.append("")
+
+    digest = "\n".join(digest_parts)
+
+    # Send to Talha via WhatsApp
+    admin_wa = CONFIG.get('communication', {}).get('admin_whatsapp', '')
+    if admin_wa:
+        try:
+            erp.send_whatsapp(admin_wa, digest[:1500])
+            log.info('EOD digest sent to admin — %d reports', len(reports))
+        except Exception as e:
+            log.error('EOD digest send failed: %s', e)
+    else:
+        log.warning('EOD summary: no admin_whatsapp configured')
+
+
 async def ask_claude_team_conversational(sender_number: str, sender_name: str, message: str) -> str:
     """
     Full conversational AI for team members via WhatsApp.
@@ -3119,6 +3296,11 @@ async def ask_claude_team_conversational(sender_number: str, sender_name: str, m
     Refuses only: personal/private emails, financial records, salary/payroll data.
     Keeps replies short (WhatsApp-appropriate, max 3-4 sentences).
     """
+    # Check if this member is in an active EOD session first
+    eod_reply = await _handle_eod_conversation(sender_number, sender_name, message)
+    if eod_reply is not None:
+        return eod_reply
+
     import anthropic as _ant
 
     # Load last 6 messages as context
@@ -5428,6 +5610,14 @@ def main():
         scheduler.add_job(
             lambda: _run(lambda: job_escalation_check(app)),
             "interval", minutes=5, id="escalation_check",
+        )
+        scheduler.add_job(
+            lambda: _run(lambda: job_eod_report_request(app)),
+            "cron", hour=13, minute=45, id="eod_report_request",
+        )
+        scheduler.add_job(
+            lambda: _run(lambda: job_eod_summary(app)),
+            "cron", hour=15, minute=30, id="eod_summary",
         )
         # ── Donna web dashboard ──────────────────────────────────────────────────
         web_api.set_ask_claude(ask_claude)

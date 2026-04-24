@@ -590,6 +590,25 @@ async def take_escalation(escalation_id: int, body: TakeEscalationBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+# ── EOD Reports ───────────────────────────────────────────────────────────────
+
+@app.get("/api/reports/daily")
+async def get_daily_reports_api(date: str = None, session=Depends(require_auth)):
+    from datetime import date as _date
+    report_date = date or _date.today().isoformat()
+    reports = db.get_daily_reports(report_date=report_date)
+    return {"reports": reports, "date": report_date, "count": len(reports)}
+
+
+@app.get("/api/reports/member/{whatsapp}")
+async def get_member_reports_api(whatsapp: str, session=Depends(require_auth)):
+    import urllib.parse
+    wa_decoded = urllib.parse.unquote(whatsapp)
+    reports = db.get_member_report_history(wa_decoded, limit=10)
+    return {"reports": reports, "whatsapp": wa_decoded, "count": len(reports)}
+
 # ── Chat ──────────────────────────────────────────────────────────────────────
 class ChatBody(BaseModel):
     message: str

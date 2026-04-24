@@ -424,6 +424,52 @@ function CustomerCard({customer,active,onClick,unreadCount}){
 }
 
 // ─── SIDEBAR ─────────────────────────────────────────────────────────────────
+function ReportDetailPanel({reportWa,memberName,isDark}){
+  const [reports,setReports]=React.useState([]);
+  const [loading,setLoading]=React.useState(true);
+  React.useEffect(()=>{
+    if(!reportWa)return;
+    setLoading(true);
+    authFetch(`/api/reports/member/${encodeURIComponent(reportWa)}`)
+      .then(d=>{setReports(d&&d.reports?d.reports:[]);setLoading(false);})
+      .catch(()=>setLoading(false));
+  },[reportWa]);
+  return <div style={{flex:1,display:'flex',flexDirection:'column',overflowY:'auto',padding:'20px 20px 80px'}}>
+    <div style={{marginBottom:20}}>
+      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)',marginBottom:4}}>{memberName} — EOD Reports</div>
+      <div style={{fontSize:11,color:'var(--text-3)'}}>Last 10 entries</div>
+    </div>
+    {loading&&<div style={{color:'var(--text-3)',fontSize:12,padding:'20px 0'}}>Loading...</div>}
+    {!loading&&reports.length===0&&<div style={{color:'var(--text-3)',fontSize:12,padding:'20px 0',textAlign:'center'}}>No reports yet.</div>}
+    {reports.map((r,i)=><div key={i} style={{marginBottom:16,padding:14,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8}}>
+      <div style={{fontSize:11,fontWeight:600,color:'var(--teal)',marginBottom:8,fontFamily:'var(--mono)'}}>{r.report_date}</div>
+      <div style={{fontSize:12,color:'var(--text-1)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{r.report_text}</div>
+    </div>)}
+  </div>;
+}
+
+function ReportsSection({activeThread,setActiveThread,liveTeam,onClose}){
+  const [open,setOpen]=React.useState(false);
+  return <div style={{padding:'0 8px 4px',flexShrink:0}}>
+    <button onClick={()=>setOpen(o=>!o)} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 8px 6px',borderRadius:6,color:'var(--text-3)',background:'none',border:'none',cursor:'pointer'}}>
+      <span style={{fontSize:9,fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase'}}>EOD Reports</span>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" style={{transform:open?'rotate(180deg)':'none',transition:'transform 0.2s'}}><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+    </button>
+    {open&&<div style={{maxHeight:200,overflowY:'auto'}}>
+      {liveTeam.map(m=>{
+        const rid='report_'+m.id;
+        return <button key={rid} onClick={()=>{setActiveThread(rid);onClose();}} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'7px 10px',borderRadius:6,background:activeThread===rid?'var(--teal-dim)':'transparent',border:'none',cursor:'pointer',textAlign:'left',transition:'background 0.15s'}}>
+          <div style={{width:24,height:24,borderRadius:'50%',background:'var(--bg3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:700,color:'var(--text-2)',flexShrink:0}}>{m.avatar}</div>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:12,fontWeight:500,color:activeThread===rid?'var(--teal)':'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.name}</div>
+            <div style={{fontSize:10,color:'var(--text-3)'}}>View history</div>
+          </div>
+        </button>;
+      })}
+    </div>}
+  </div>;
+}
+
 function TeamSection({activeThread,setActiveThread,liveTeam,onClose}){
   const [open,setOpen]=React.useState(false);
   return <div style={{padding:'8px 8px 4px',flexShrink:0}}>
@@ -475,6 +521,8 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
 
       {/* Team — collapsible */}
       <TeamSection activeThread={activeThread} setActiveThread={setActiveThread} liveTeam={liveTeam} onClose={onClose}/>
+      {/* EOD Reports — collapsible */}
+      <ReportsSection activeThread={activeThread} setActiveThread={setActiveThread} liveTeam={liveTeam} onClose={onClose}/>
 
       {/* Customers */}
       <div style={{padding:'8px 8px 4px',flex:1}}>
@@ -737,9 +785,13 @@ function App(){
 
   const isTeamThread=!!teamIdMap[activeThread];
   const isCustomerThread=liveCustomers.some(c=>c.id===activeThread);
+  const isReportThread=activeThread&&activeThread.startsWith('report_');
+  const reportMemberId=isReportThread?activeThread.replace('report_',''):'';
+  const reportMember=isReportThread?liveTeam.find(m=>m.id===reportMemberId):null;
+  const reportWa=reportMember?reportMember.whatsapp:'';
   const activeMember=liveTeam.find(m=>m.id===activeThread);
   const activeCustomer=liveCustomers.find(c=>c.id===activeThread);
-  const showReadOnly=(isTeamThread||isCustomerThread)&&!intervening;
+  const showReadOnly=(isTeamThread||isCustomerThread||isReportThread)&&!intervening;
 
   const filterCounts=useMemo(()=>({
     all:liveCustomers.length,
@@ -810,7 +862,8 @@ function App(){
   const currentMsgs=threads[activeThread]||[];
   let threadLabel='Donna — AI Assistant';
   let threadSub='Powered by Claude';
-  if(activeMember){threadLabel=activeMember.name;threadSub=activeMember.status==='online'?'● Online':'● Away';}
+  if(isReportThread&&reportMember){threadLabel=reportMember.name+' — EOD Reports';threadSub='Daily report history';}
+  else if(activeMember){threadLabel=activeMember.name;threadSub=activeMember.status==='online'?'● Online':'● Away';}
   else if(activeCustomer){threadLabel=activeCustomer.name;threadSub=activeCustomer.company+' · '+activeCustomer.phone;}
 
   const prodUrl=(statusData.production_url||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'')||'helpdesk.botsolutions.tech';
@@ -869,10 +922,11 @@ function App(){
 
           {/* Messages */}
           <div style={{flex:1,overflowY:'auto',padding:'16px 16px 8px',WebkitOverflowScrolling:'touch'}}>
-            {isCustomerThread&&intervening&&<div style={{margin:'0 0 16px',padding:'10px 14px',background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.25)',borderRadius:8,display:'flex',alignItems:'center',gap:8,fontSize:12}}>
+            {isReportThread&&reportMember&&<ReportDetailPanel reportWa={reportWa} memberName={reportMember.name} isDark={isDark}/>}
+            {!isReportThread&&isCustomerThread&&intervening&&<div style={{margin:'0 0 16px',padding:'10px 14px',background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.25)',borderRadius:8,display:'flex',alignItems:'center',gap:8,fontSize:12}}>
               <span>👤</span><span style={{color:'var(--amber)',fontWeight:500}}>Human agent mode — Donna paused</span>
             </div>}
-            {isCustomerThread
+            {!isReportThread&&isCustomerThread
               ?liveCustomerMsgs.map(msg=><ChatMessage key={msg.id} msg={msg} isCustomerThread={true}/>)
               :currentMsgs.map(msg=><ChatMessage key={msg.id} msg={msg} isCustomerThread={false}/>)}
             {typing&&<TypingIndicator/>}
