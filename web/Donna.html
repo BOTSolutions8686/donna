@@ -40,7 +40,7 @@
   --green-dim:rgba(5,150,80,0.10);--red-dim:rgba(200,50,44,0.10);
   --amber-dim:rgba(180,110,0,0.10);--yellow-dim:rgba(180,160,0,0.10);
 }
-html,body,#root{height:100%;overflow:hidden;background:var(--bg0);font-family:var(--sans);color:var(--text-1);}
+html,body,#root{height:100%;height:100dvh;overflow:hidden;background:var(--bg0);font-family:var(--sans);color:var(--text-1);}
 ::-webkit-scrollbar{width:4px;height:4px;}
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:4px;}
@@ -53,7 +53,7 @@ input,textarea{font-family:var(--sans);}
 @keyframes slideIn{from{transform:translateX(-100%);}to{transform:translateX(0);}}
 
 /* ── DESKTOP layout ── */
-.app-shell{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+.app-shell{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;}
 .app-body{display:flex;flex:1;overflow:hidden;}
 .sidebar{width:var(--sidebar-w);flex-shrink:0;display:flex;flex-direction:column;background:var(--bg1);border-right:1px solid var(--border);transition:transform 0.25s ease;}
 .main-area{flex:1;display:flex;overflow:hidden;}
@@ -67,7 +67,7 @@ input,textarea{font-family:var(--sans);}
 @media(max-width:768px){
   :root{--sidebar-w:88vw;--tools-w:100vw;}
 
-  /* Sidebar — full height slide-in drawer */
+  /* Sidebar: off-canvas drawer */
   .sidebar{
     position:fixed;top:0;left:0;height:100%;
     width:var(--sidebar-w);max-width:320px;
@@ -75,12 +75,21 @@ input,textarea{font-family:var(--sans);}
     transform:translateX(-110%);
     transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
     box-shadow:4px 0 40px rgba(0,0,0,0.7);
+    display:flex;flex-direction:column;
   }
   .sidebar.open{transform:translateX(0);}
+
+  /* Overlay: visible on mobile only */
   .overlay.open{display:block;}
   .mob-header-btn{display:flex;}
 
-  /* Tools panel — bottom sheet */
+  /* Main area: full width since sidebar is off-canvas */
+  .main-area{width:100vw;}
+
+  /* Chat column: full width, no right border */
+  .chat-col{width:100%;border-right:none;min-width:0;}
+
+  /* Tools panel: bottom sheet */
   .tools-panel{
     position:fixed;bottom:0;left:0;right:0;z-index:250;
     height:75vh;max-height:600px;
@@ -104,34 +113,46 @@ input,textarea{font-family:var(--sans);}
     flex:1;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:3px;font-size:10px;
     color:var(--text-3);cursor:pointer;border:none;background:none;
-    padding:8px 4px;transition:color 0.15s;-webkit-tap-highlight-color:transparent;
+    padding:8px 4px;transition:color 0.15s;
+    -webkit-tap-highlight-color:transparent;
+    position:relative;
   }
   .mob-nav-btn.active{color:var(--teal);}
+  .mob-nav-btn svg{opacity:0.7;}
+  .mob-nav-btn.active svg{opacity:1;}
 
-  /* Chat messages — more padding on mobile */
-  .chat-messages{padding:12px 8px 12px;}
+  /* Chat */
+  .chat-messages{padding:12px 10px;}
   .msg-bubble{max-width:90%;}
 
-  /* Input area — respect safe area */
+  /* Input area */
   .chat-input-area{
-    padding:8px;
+    padding:8px 10px;
     padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));
   }
 
-  /* Status bar */
-  .status-bar{padding:4px 10px;font-size:10px;}
+  /* Status bar: hidden */
+  .status-bar{display:none !important;}
+
+  /* Header user pill: hidden */
+  .header-user-pill{display:none !important;}
 
   /* Header */
   .app-header{padding:0 10px;}
 }
 
-/* Notch / home indicator safe area */
-@supports(padding: env(safe-area-inset-bottom)){
+/* Desktop: never show overlay */
+@media(min-width:769px){
+  .overlay{display:none !important;}
+}
+
+/* Safe area */
+@supports(padding:env(safe-area-inset-bottom)){
   .mob-nav{padding-bottom:env(safe-area-inset-bottom);}
   .chat-input-area{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
 }
 
-/* ── TABLET (769px – 1024px) ── */
+/* Tablet */
 @media(min-width:769px) and (max-width:1024px){
   :root{--sidebar-w:220px;--tools-w:210px;}
 }
@@ -531,7 +552,7 @@ function TeamSection({activeThread,setActiveThread,liveTeam,onClose}){
 }
 
 function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam}){
-  return <div className="sidebar" id="sidebar-el">
+  return <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
     <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
       <div style={{display:'flex',alignItems:'center',gap:9}}>
         <div style={{width:30,height:30,borderRadius:7,background:'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
@@ -687,11 +708,29 @@ function App(){
   const prevMsgCountRef=useRef({});
   // Mobile UI state
   const [sidebarOpen,setSidebarOpen]=useState(false);
-  const [isMobile,setIsMobile]=React.useState(()=>window.innerWidth<=768);
+  const _mq=window.matchMedia('(max-width:768px)');
+  const [isMobile,setIsMobile]=React.useState(()=>_mq.matches);
   React.useEffect(()=>{
-    const h=()=>setIsMobile(window.innerWidth<=768);
-    window.addEventListener('resize',h,{passive:true});
-    return ()=>window.removeEventListener('resize',h);
+    const h=(e)=>setIsMobile(e.matches);
+    _mq.addEventListener('change',h);
+    // Track virtual keyboard offset for input positioning
+    const vvh=()=>{
+      if(window.visualViewport){
+        const offset=window.innerHeight-window.visualViewport.height;
+        document.documentElement.style.setProperty('--keyboard-offset',offset+'px');
+      }
+    };
+    if(window.visualViewport){
+      window.visualViewport.addEventListener('resize',vvh);
+      window.visualViewport.addEventListener('scroll',vvh);
+    }
+    return ()=>{
+      _mq.removeEventListener('change',h);
+      if(window.visualViewport){
+        window.visualViewport.removeEventListener('resize',vvh);
+        window.visualViewport.removeEventListener('scroll',vvh);
+      }
+    };
   },[]);
   const [toolsOpen,setToolsOpen]=useState(false);
   const chatEndRef=useRef(null);
@@ -1039,13 +1078,13 @@ function App(){
 
         {/* Tools panel — desktop only */}
         <div className={`tools-panel ${toolsOpen?'open':''}`}>
-          {/* Mobile drag handle */}
-          <div onClick={()=>setToolsOpen(false)} style={{
+          {/* Mobile drag handle — only rendered on mobile */}
+          {isMobile&&<div onClick={()=>setToolsOpen(false)} style={{
             display:'flex',justifyContent:'center',alignItems:'center',
             padding:'10px 0 6px',cursor:'pointer',flexShrink:0
           }}>
             <div style={{width:36,height:4,borderRadius:2,background:'var(--border-hi)'}}/>
-          </div>
+          </div>}
           {ToolsPanelContent}
         </div>
       </div>

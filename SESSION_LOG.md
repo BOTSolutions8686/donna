@@ -746,3 +746,41 @@ curl -X POST https://donna.botsolutions.tech/whatsapp-incoming
 → WhatsApp in from Abdul Malik logged
 → Reply sent in 4 seconds
 Full HTTPS path confirmed working end-to-end.
+
+
+---
+
+## Session: 2026-04-26 — Mobile Layout Critical Fixes
+
+**Problem 1 (double sidebar div):** Sidebar component returned a div with
+className='sidebar' id='sidebar-el' — same as the outer wrapper in App JSX.
+This created two nested .sidebar divs, CSS applied to both, causing double-width
+and broken fixed positioning on mobile.
+Fix: Sidebar now returns plain flex div with height:100%/overflow:hidden.
+
+**Problem 2 (isMobile via window.innerWidth):** window.innerWidth doesn't
+always match CSS media queries (different scroll bar handling, viewport meta).
+Fix: replaced with window.matchMedia('(max-width:768px)') listener. Also added
+visualViewport resize/scroll handler to track --keyboard-offset for keyboard avoidance.
+
+**Problem 3 (.main-area width):** On mobile, sidebar is position:fixed (out of flow)
+but .main-area still only got flex:1 of .app-body. Without the sidebar column
+consuming space, .main-area should take full width.
+Fix: .main-area{width:100vw} and .chat-col{width:100%;border-right:none;min-width:0}
+added to mobile media query.
+
+**Problem 4 (overlay on desktop):** .overlay.open showed on desktop when
+sidebarOpen=true (e.g. if state was stale). Added @media(min-width:769px) rule
+with display:none !important to prevent this entirely.
+
+**Problem 5 (drag handle on desktop):** Tools panel drag handle was always
+rendered (no guard). Wrapped in {isMobile&&...}.
+
+**Problem 6 (dvh):** html/body/#root and .app-shell now use height:100dvh as
+progressive enhancement alongside 100vh for Safari mobile viewport correctness.
+
+**Also improved:**
+- .mob-nav-btn: added position:relative for future badge support
+- .mob-nav-btn svg: opacity:0.7/1 for active state visual feedback
+- status-bar and header-user-pill: display:none !important on mobile
+- sidebar CSS in mobile: added display:flex;flex-direction:column for consistency
