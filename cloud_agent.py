@@ -2905,7 +2905,24 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None):
             report_date = inputs.get("report_date", date.today().isoformat())
             reports = db.get_daily_reports(report_date=report_date)
             if not reports:
-                return f"No EOD reports yet for {report_date}."
+                # Check if any team conversations today mention EOD
+                with db._conn() as _c:
+                    _eod_convos = _c.execute("""
+                        SELECT DISTINCT team_member_name FROM team_conversations
+                        WHERE date(timestamp)=? AND direction='inbound'
+                        AND (LOWER(message_content) LIKE '%eod%'
+                             OR LOWER(message_content) LIKE '%daily report%'
+                             OR LOWER(message_content) LIKE '%end of day%')
+                    """, (report_date,)).fetchall()
+                if _eod_convos:
+                    names = ', '.join(r[0] for r in _eod_convos)
+                    return (
+                        f"No formal EOD reports saved for {report_date}. "
+                        f"However {names} sent EOD-related messages today. "
+                        f"Their reports may have been handled conversationally but not saved. "
+                        f"This is now fixed — future EOD triggers will be saved automatically."
+                    )
+                return f"No EOD data for {report_date}. Prompts go out at 4:45 PM KSA."
             lines = [f"EOD Reports — {report_date} ({len(reports)} member(s)):\n"]
             for r in reports:
                 lines.append(f"── {r['member_name']} ──")
@@ -3296,7 +3313,26 @@ async def ask_claude_team_conversational(sender_number: str, sender_name: str, m
     Refuses only: personal/private emails, financial records, salary/payroll data.
     Keeps replies short (WhatsApp-appropriate, max 3-4 sentences).
     """
-    # Check if this member is in an active EOD session first
+    # Check if an EOD session is active OR if member is triggering one manually
+    from datetime import datetime, timezone, timedelta
+    _ksa = timezone(timedelta(hours=3))
+    _today = datetime.now(_ksa).strftime('%Y-%m-%d')
+
+    # Detect manual EOD trigger keywords
+    _msg_lower = message.lower().strip()
+    _eod_keywords = ['eod', 'end of day', 'daily report', 'my report',
+                     'work report', 'eod report', 'day report']
+    _is_manual_eod_trigger = any(kw in _msg_lower for kw in _eod_keywords)
+
+    # If no active session but member manually triggered EOD → start one
+    if _is_manual_eod_trigger and not db.get_eod_session(sender_number):
+        db.set_eod_session(sender_number, 'collecting', f'Donna: EOD check-in started')
+        first_name = sender_name.split()[0]
+        ack = f"Sure {first_name}, let's do your EOD check-in. What did you work on today?"
+        log.info('EOD manual trigger: started session for %s', sender_name)
+        return ack
+
+    # Handle ongoing EOD conversation
     eod_reply = await _handle_eod_conversation(sender_number, sender_name, message)
     if eod_reply is not None:
         return eod_reply

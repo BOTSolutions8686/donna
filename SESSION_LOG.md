@@ -647,3 +647,29 @@ Test on real iPhone/Android:
 2. Share → Add to Home Screen
 3. Verify: standalone display, teal status bar, safe area padding, back button
 
+
+
+---
+
+## Session: 2026-04-26 — EOD Report Fixes
+
+**Root cause:** EOD reports only saved when triggered by the scheduled job at 16:45 KSA
+(which sets eod_session_state first). When team members manually sent 'eod' or 'daily
+report' messages outside the scheduled window, ask_claude_team_conversational handled
+them as normal conversation — no session was started, so nothing was saved.
+
+**FIX 1 — Backfilled Imran 2026-04-24 report:**
+- Resolved 4horizon print format issue (ticket #1792) — completed
+- Aldallow warehouse data migration — in progress, on track
+- Plan for tomorrow: complete aldallow warehouse data
+
+**FIX 2 — Manual EOD keyword trigger:**
+ask_claude_team_conversational now checks for EOD keywords before normal path:
+eod, end of day, daily report, my report, work report, eod report, day report.
+If detected with no active session: creates eod_session_state (collecting) and
+replies with check-in prompt — same flow as scheduled job.
+
+**FIX 3 — get_eod_reports tool fallback:**
+When daily_reports is empty for a date, the tool now queries team_conversations
+for EOD-related messages and reports who sent them, noting reports were handled
+conversationally but not saved (now fixed going forward).
