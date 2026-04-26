@@ -673,3 +673,35 @@ replies with check-in prompt — same flow as scheduled job.
 When daily_reports is empty for a date, the tool now queries team_conversations
 for EOD-related messages and reports who sent them, noting reports were handled
 conversationally but not saved (now fixed going forward).
+
+
+---
+
+## Session: 2026-04-26 (continued) — daily_reports Schema Fix
+
+**Problem:** daily_reports table created with minimal schema (id, whatsapp_number,
+member_name, report_date, report_text, created_at). Code and frontend expected
+status, raw_conversation, submitted_at, prompted_at columns. No UNIQUE constraint,
+so ON CONFLICT dedup did nothing.
+
+**FIX 1 + 3 — Live migration:**
+Added missing columns via ALTER TABLE (status DEFAULT submitted, raw_conversation,
+submitted_at, prompted_at). Backfilled submitted_at=created_at for existing rows.
+Created UNIQUE INDEX idx_dr_date_wa ON daily_reports(report_date, whatsapp_number).
+
+**FIX 2 — database.py:**
+- Updated CREATE TABLE in init_db to include all columns + UNIQUE constraint
+- save_daily_report: now takes raw_conversation+status params, uses ON CONFLICT upsert
+- Added log_daily_report_prompt: inserts prompted row before report arrives
+- Added is_pending_eod_report: checks if prompt sent but report not submitted
+- get_daily_reports: adds whatsapp_number AS member_whatsapp alias, COALESCE(status)
+- get_member_report_history: same alias, filters empty prompted rows
+
+**FIX 4 — cloud_agent.py:**
+- job_eod_report_request now calls db.log_daily_report_prompt on send,
+  so each member has a prompted row before they reply
+
+**Verified:**
+- All 4 reports (Ahmad Bilal, Mohammad Amir, Mohammad Imran x2) returned correctly
+- member_whatsapp field present in all API responses
+- ON CONFLICT dedup works (tested duplicate insert replaced, not duplicated)

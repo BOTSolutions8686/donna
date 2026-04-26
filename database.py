@@ -176,10 +176,16 @@ def init_db():
                 member_name TEXT NOT NULL,
                 report_date TEXT NOT NULL,
                 report_text TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now'))
+                status TEXT DEFAULT 'submitted',
+                raw_conversation TEXT,
+                submitted_at TEXT,
+                prompted_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(report_date, whatsapp_number)
             );
             CREATE INDEX IF NOT EXISTS idx_dr_number ON daily_reports(whatsapp_number);
             CREATE INDEX IF NOT EXISTS idx_dr_date ON daily_reports(report_date);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_dr_date_wa ON daily_reports(report_date, whatsapp_number);
 
             CREATE TABLE IF NOT EXISTS eod_session_state (
                 whatsapp_number TEXT PRIMARY KEY,
@@ -1566,27 +1572,71 @@ def clear_eod_session(whatsapp_number: str):
         )
 
 
-def save_daily_report(whatsapp_number: str, member_name: str, report_date: str, report_text: str):
-    """Persist a completed EOD report."""
+def save_daily_report(whatsapp_number: str, member_name: str, report_date: str,
+                      report_text: str, raw_conversation: str = None, status: str = 'submitted'):
+    """Persist a completed EOD report. Uses ON CONFLICT to upsert by (report_date, whatsapp_number)."""
+    from datetime import datetime
+    now = datetime.utcnow().isoformat(sep=' ')[:19]
     with _conn() as conn:
         conn.execute(
-            """INSERT INTO daily_reports (whatsapp_number, member_name, report_date, report_text)
-               VALUES (?, ?, ?, ?)""",
-            (whatsapp_number, member_name, report_date, report_text),
+            """INSERT INTO daily_reports
+                   (whatsapp_number, member_name, report_date, report_text,
+                    raw_conversation, status, submitted_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(report_date, whatsapp_number) DO UPDATE SET
+                   report_text=excluded.report_text,
+                   raw_conversation=excluded.raw_conversation,
+                   status=excluded.status,
+                   submitted_at=excluded.submitted_at""",
+            (whatsapp_number, member_name, report_date, report_text,
+             raw_conversation, status, now, now),
         )
 
 
+def log_daily_report_prompt(member_name: str, whatsapp_number: str, report_date: str):
+    """Record that a prompt was sent to a member — creates/updates row with status='prompted'."""
+    from datetime import datetime
+    now = datetime.utcnow().isoformat(sep=' ')[:19]
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO daily_reports
+                   (whatsapp_number, member_name, report_date, report_text,
+                    status, prompted_at, created_at)
+               VALUES (?, ?, ?, '', 'prompted', ?, ?)
+               ON CONFLICT(report_date, whatsapp_number) DO UPDATE SET
+                   prompted_at=excluded.prompted_at""",
+            (whatsapp_number, member_name, report_date, now, now),
+        )
+
+
+def is_pending_eod_report(whatsapp_number: str, report_date: str) -> bool:
+    """Return True if a prompt was sent but report not yet submitted for this date."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT id FROM daily_reports
+               WHERE whatsapp_number=? AND report_date=? AND status='prompted'""",
+            (whatsapp_number, report_date),
+        ).fetchone()
+    return row is not None
+
+
 def get_daily_reports(report_date: str = None, limit: int = 50):
-    """Return daily reports, optionally filtered by date."""
+    """Return daily reports, optionally filtered by date. Adds member_whatsapp alias."""
+    _SQL = """SELECT id, whatsapp_number, whatsapp_number AS member_whatsapp,
+                      member_name, report_date, report_text,
+                      COALESCE(status,'submitted') AS status,
+                      raw_conversation, submitted_at, prompted_at, created_at
+               FROM daily_reports
+               WHERE status != 'prompted' OR report_text != ''"""
     with _conn() as conn:
         if report_date:
             rows = conn.execute(
-                "SELECT * FROM daily_reports WHERE report_date=? ORDER BY created_at DESC LIMIT ?",
+                _SQL + " AND report_date=? ORDER BY created_at DESC LIMIT ?",
                 (report_date, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM daily_reports ORDER BY created_at DESC LIMIT ?",
+                _SQL + " ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
     return [dict(r) for r in rows]
@@ -1596,7 +1646,13 @@ def get_member_report_history(whatsapp_number: str, limit: int = 10):
     """Return recent EOD reports for a specific team member."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM daily_reports WHERE whatsapp_number=? ORDER BY report_date DESC LIMIT ?",
+            """SELECT id, whatsapp_number, whatsapp_number AS member_whatsapp,
+                      member_name, report_date, report_text,
+                      COALESCE(status,'submitted') AS status,
+                      raw_conversation, submitted_at, prompted_at, created_at
+               FROM daily_reports
+               WHERE whatsapp_number=? AND (status != 'prompted' OR report_text != '')
+               ORDER BY report_date DESC LIMIT ?""",
             (whatsapp_number, limit),
         ).fetchall()
     return [dict(r) for r in rows]

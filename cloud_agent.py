@@ -3261,8 +3261,12 @@ async def job_eod_report_request(app):
         if not wa:
             continue
         try:
+            from datetime import datetime, timezone, timedelta
+            _ksa = timezone(timedelta(hours=3))
+            _today = datetime.now(_ksa).strftime('%Y-%m-%d')
             opener = _build_eod_opener(name)
             db.set_eod_session(wa, 'collecting', f"Donna: {opener}")
+            db.log_daily_report_prompt(name, wa, _today)
             erp.send_whatsapp(wa, opener)
             db.log_team_conversation(name, wa, 'outbound', opener)
             log.info('EOD check-in sent to %s', name)
