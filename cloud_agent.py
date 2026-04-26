@@ -4262,6 +4262,9 @@ async def job_whatsapp_inbound_poll(app):
                 if wa_name and db.is_customer_message_processed(wa_name):
                     log.debug('WA poll: customer message %s already processed', wa_name)
                     continue
+                if db.is_customer_message_recently_processed(sender_number_cust, content_raw, within_minutes=3):
+                    log.debug('WA poll: customer message already handled by webhook for %s — skipping', sender_number_cust)
+                    continue
                 try:
                     await handle_customer_message(sender_number_cust, content_raw, wa_name)
                 except Exception as _cust_err:
@@ -4271,6 +4274,17 @@ async def job_whatsapp_inbound_poll(app):
             sender_number = sender_normalized
             sender_name = entry.get('name', sender_raw)
             access = entry.get('access', 'team')
+
+            # Content-based dedup: webhook stores wh_ hash, poll has real ERPNext doc name
+            # They never match on wa_message_name so check content+time window instead
+            if db.is_team_message_recently_processed(sender_number, content_raw, within_minutes=3):
+                log.debug('WA poll: message already handled by webhook for %s — skipping', sender_name)
+                # Register the ERPNext doc name so we skip it on future polls too
+                db.log_team_conversation(
+                    sender_name, sender_number, 'inbound', content_raw,
+                    wa_message_name=wa_name
+                )
+                continue
 
             # Log to team_conversations with wa_message_name for dedup
             logged = db.log_team_conversation(
@@ -5621,7 +5635,7 @@ def main():
         )
         scheduler.add_job(
             lambda: _run(lambda: job_whatsapp_inbound_poll(app)),
-            "interval", minutes=2, id="whatsapp_inbound_poll",
+            "interval", seconds=60, id="whatsapp_inbound_poll",
         )
         scheduler.add_job(
             lambda: _run(lambda: job_email_check(app)),
@@ -5672,7 +5686,7 @@ def main():
             "health_check(6am) | collections_escalation(mon 8am) | suggestions_digest(mon 8:15am) | "
             "team_reminders(9:30am daily) | team_accountability(mon 8:30am) | "
             "monthly_pl(1st 9am) | refresh_coa(sun 11pm) | "
-            "whatsapp_poll(2min) | email_check(30min) | delivery_check(10min) | "
+            "whatsapp_poll(60s-fallback) | email_check(30min) | delivery_check(10min) | "
             "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min)"
         )
 

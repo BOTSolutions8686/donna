@@ -1656,3 +1656,26 @@ def get_member_report_history(whatsapp_number: str, limit: int = 10):
             (whatsapp_number, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+def is_team_message_recently_processed(whatsapp_number, message_content, within_minutes=3):
+    """Content+time dedup — catches webhook/poll overlap where wa_message_name keys differ."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM team_conversations "
+            "WHERE whatsapp_number=? AND message_content=? AND direction='inbound' "
+            "AND timestamp >= datetime('now', ? || ' minutes') LIMIT 1",
+            (whatsapp_number, message_content, '-{}'.format(within_minutes))
+        ).fetchone()
+    return row is not None
+
+
+def is_customer_message_recently_processed(phone, message_content, within_minutes=3):
+    """Content+time dedup for customer messages."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM customer_conversations "
+            "WHERE customer_phone=? AND message_content=? AND direction='inbound' "
+            "AND timestamp >= datetime('now', ? || ' minutes') LIMIT 1",
+            (phone, message_content, '-{}'.format(within_minutes))
+        ).fetchone()
+    return row is not None

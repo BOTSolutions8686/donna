@@ -705,3 +705,44 @@ Created UNIQUE INDEX idx_dr_date_wa ON daily_reports(report_date, whatsapp_numbe
 - All 4 reports (Ahmad Bilal, Mohammad Amir, Mohammad Imran x2) returned correctly
 - member_whatsapp field present in all API responses
 - ON CONFLICT dedup works (tested duplicate insert replaced, not duplicated)
+
+
+---
+
+## Session: 2026-04-26 — HTTPS Webhook + Content Dedup + 60s Poll
+
+**PART 1 — Caddy routing:**
+Added /whatsapp-incoming and /webhook-health routes to Caddyfile, both
+pointing to port 8765 (aiohttp webhook server). All other traffic continues
+to port 8080 (FastAPI dashboard). Caddy reloaded with no downtime.
+
+**PART 2 — ERPNext webhook updated programmatically:**
+Used ERPNext REST API (PUT /api/resource/Webhook/Donna WhatsApp Inbound)
+to update request_url from http://165.232.114.90:8765/whatsapp-incoming
+to https://donna.botsolutions.tech/whatsapp-incoming.
+Verified: URL updated, Enabled: 1.
+
+**PART 3 — Poll reduced from 2 min to 60s:**
+job_whatsapp_inbound_poll now runs every 60 seconds. Webhook is primary
+(instant), poll is fallback for anything missed. Log line updated to
+whatsapp_poll(60s-fallback).
+
+**PART 4+5 — Content+time dedup (root cause fix):**
+Root cause: webhook stored wh_+MD5 hash as wa_message_name, poll stored
+real ERPNext doc name (e.g. WA-MSG-2026-00123). These never matched on
+the UNIQUE constraint, so the same message was processed twice.
+Fix: new db.is_team_message_recently_processed(number, content, 3min) and
+is_customer_message_recently_processed() functions check content+timestamp
+window instead of doc name. Poll now checks these before calling Claude.
+If content dedup hits, poll still registers the ERPNext doc name so future
+polls skip it via the cheaper is_wa_message_processed check.
+
+**PART 6 — Cleanup:**
+Deleted 85 duplicate team_conversations records from before 2026-04-22
+(pre-dedup era, wa_message_name=NULL, kept MIN(id) per member+content).
+
+**Verified:**
+curl -X POST https://donna.botsolutions.tech/whatsapp-incoming
+→ WhatsApp in from Abdul Malik logged
+→ Reply sent in 4 seconds
+Full HTTPS path confirmed working end-to-end.
