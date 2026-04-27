@@ -1813,3 +1813,13 @@ def mark_notifications_read():
     """Mark all notifications as read."""
     with _conn() as conn:
         conn.execute("UPDATE donna_notifications SET read=1 WHERE read=0")
+
+
+def delete_notification(notif_id: int):
+    with _conn() as conn:
+        conn.execute("DELETE FROM donna_notifications WHERE id=?", (notif_id,))
+
+
+def clear_all_notifications():
+    with _conn() as conn:
+        conn.execute("DELETE FROM donna_notifications")

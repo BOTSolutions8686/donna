@@ -957,6 +957,18 @@ async def mark_notifications_read_api(session=Depends(require_auth)):
     return JSONResponse({"ok": True})
 
 
+@app.delete("/api/notifications/{notif_id}")
+async def delete_notification_api(notif_id: int, session=Depends(require_auth)):
+    db.delete_notification(notif_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/notifications/clear-all")
+async def clear_all_notifications_api(session=Depends(require_auth)):
+    db.clear_all_notifications()
+    return JSONResponse({"ok": True})
+
+
 # ── Push test ─────────────────────────────────────────────────────────────────
 
 _send_push_fn = None

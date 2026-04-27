@@ -322,15 +322,21 @@ function ApiSessionLog({data}){
   return <div style={{marginTop:8,background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:8,padding:'12px',maxHeight:300,overflowY:'auto',fontSize:11,lineHeight:1.7,fontFamily:'var(--mono)',color:'var(--text-2)',whiteSpace:'pre-wrap'}}>{data.content.split('\n').slice(-60).join('\n')}</div>;
 }
 
+let _teamContacts=[];
 function ApiSendWhatsApp(){
   const [to,setTo]=useState('');const [msg,setMsg]=useState('');const [status,setStatus]=useState(null);const [loading,setLoading]=useState(false);
-  const send=async()=>{if(!to||!msg)return;setLoading(true);try{const r=await fetchApi('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,message:msg})});setStatus({ok:true,msg:'Sent!'});}catch(e){setStatus({ok:false,msg:e.message});}setLoading(false);};
-  if(status) return <div style={{marginTop:8,color:status.ok?'var(--green)':'var(--red)',fontSize:13}}>{status.ok?'✓ ':''}{status.msg}</div>;
+  const send=async()=>{if(!to||!msg)return;setLoading(true);try{await fetchApi('/api/tools/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,message:msg})});setStatus({ok:true,msg:'Sent!'});}catch(e){setStatus({ok:false,msg:e.message});}setLoading(false);};
+  if(status) return <div style={{marginTop:8,color:status.ok?'var(--green)':'var(--red)',fontSize:13}}>{status.ok?'✓ ':''}{status.msg}<button onClick={()=>setStatus(null)} style={{marginLeft:8,background:'none',border:'none',cursor:'pointer',color:'var(--text-3)',fontSize:11}}>Send another</button></div>;
   const inp={background:'var(--bg0)',border:'1px solid var(--border)',borderRadius:6,padding:'9px 12px',color:'var(--text-1)',fontSize:13,outline:'none',width:'100%'};
+  const contacts=_teamContacts.filter(m=>m.whatsapp);
   return <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:8}}>
-    <input value={to} onChange={e=>setTo(e.target.value)} placeholder="+966XXXXXXXXX" style={inp}/>
+    {contacts.length>0&&<select value={to} onChange={e=>setTo(e.target.value)} style={{...inp,color:to?'var(--text-1)':'var(--text-3)'}}>
+      <option value="">— Pick team contact —</option>
+      {contacts.map(m=><option key={m.id} value={m.whatsapp}>{m.name} ({m.whatsapp})</option>)}
+    </select>}
+    <input value={to} onChange={e=>setTo(e.target.value)} placeholder="+966XXXXXXXXX (or pick above)" style={inp}/>
     <textarea value={msg} onChange={e=>setMsg(e.target.value)} rows={3} placeholder="Message..." style={{...inp,resize:'none'}}/>
-    <button onClick={send} disabled={loading} style={{background:'#25d366',color:'#fff',borderRadius:6,padding:'9px 16px',fontSize:13,fontWeight:600,opacity:loading?0.6:1,alignSelf:'flex-start'}}>{loading?'Sending…':'Send WhatsApp'}</button>
+    <button onClick={send} disabled={loading||!to||!msg} style={{background:'#25d366',color:'#fff',borderRadius:6,padding:'9px 16px',fontSize:13,fontWeight:600,opacity:(loading||!to||!msg)?0.55:1,alignSelf:'flex-start'}}>{loading?'Sending…':'Send WhatsApp'}</button>
   </div>;
 }
 function ApiSendEmail(){
@@ -377,8 +383,27 @@ const TOOL_API_MAP={
 };
 
 // ─── CHAT ─────────────────────────────────────────────────────────────────────
+function inlineMarkdown(text,ki){
+  const parts=text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
+  return parts.map((p,i)=>{
+    if(p.startsWith('**')&&p.endsWith('**')) return <strong key={ki+'b'+i}>{p.slice(2,-2)}</strong>;
+    if(p.startsWith('*')&&p.endsWith('*')) return <em key={ki+'i'+i}>{p.slice(1,-1)}</em>;
+    if(p.startsWith('`')&&p.endsWith('`')) return <code key={ki+'c'+i} style={{background:'var(--bg3)',borderRadius:3,padding:'1px 5px',fontSize:'0.9em',fontFamily:'var(--mono)'}}>{p.slice(1,-1)}</code>;
+    return p;
+  });
+}
 function parseMarkdown(text){
-  return text.split(/(\*\*[^*]+\*\*)/g).map((p,i)=>p.startsWith('**')?<strong key={i}>{p.slice(2,-2)}</strong>:p);
+  if(!text) return null;
+  const lines=text.split('\n');
+  return lines.map((line,li)=>{
+    const hm=line.match(/^(#{1,3})\s+(.+)/);
+    if(hm){const sz=[18,15,13][hm[1].length-1]||13;return <div key={li} style={{fontWeight:700,fontSize:sz,marginTop:8,marginBottom:2,color:'var(--text-1)'}}>{inlineMarkdown(hm[2],li)}</div>;}
+    if(/^[-+]\s/.test(line)){return <div key={li} style={{display:'flex',gap:6,marginTop:2}}><span style={{color:'var(--teal)',flexShrink:0}}>•</span><span>{inlineMarkdown(line.slice(2),li)}</span></div>;}
+    const nm=line.match(/^(\d+)\.\s+(.+)/);
+    if(nm){return <div key={li} style={{display:'flex',gap:6,marginTop:2}}><span style={{color:'var(--teal)',flexShrink:0,minWidth:16}}>{nm[1]}.</span><span>{inlineMarkdown(nm[2],li)}</span></div>;}
+    if(!line.trim()) return <div key={li} style={{height:6}}/>;
+    return <div key={li}>{inlineMarkdown(line,li)}</div>;
+  });
 }
 
 function FlagCard({reason}){
@@ -406,9 +431,17 @@ function ChatMessage({msg,isCustomerThread}){
     <div style={{maxWidth:'82%'}}>
       <div style={bubbleStyle}>
         <div>{parseMarkdown(msg.text||'')}</div>
-        {ApiComp&&<ApiComp data={msg.apiData}/>}
+        {ApiComp&&<>
+          <ApiComp data={msg.apiData}/>
+          <div style={{fontSize:10,color:'var(--text-3)',marginTop:6,fontFamily:'var(--mono)'}}>Updated {msg.ts}</div>
+        </>}
       </div>
-      <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,textAlign:isRight?'right':'left',fontFamily:'var(--mono)'}}>{msg.ts}{isHuman?' · You':''}</div>
+      <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:6,justifyContent:isRight?'flex-end':'flex-start'}}>
+        <span>{msg.ts}{isHuman?' · You':''}</span>
+        {isDonna&&!ApiComp&&<button onClick={()=>navigator.clipboard?.writeText(msg.text||'').catch(()=>{})} title="Copy message" style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-3)',padding:'0 2px',borderRadius:3,lineHeight:1,opacity:0.55,fontSize:11}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.55}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>}
+      </div>
     </div>
   </div>;
 }
@@ -717,7 +750,7 @@ function WhatsAppSettingsPanel({onClose}){
 }
 
 
-function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam}){
+function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone}){
   return <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
     <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
       <div style={{display:'flex',alignItems:'center',gap:9}}>
@@ -777,6 +810,11 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
         <div style={{fontSize:12,fontWeight:500,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{loggedIn.name}</div>
         <div style={{fontSize:10,color:'var(--text-3)'}}>{loggedIn.role}</div>
       </div>
+      {installPrompt&&!installDone&&<button onClick={onInstall} title="Install Donna as app" style={{color:'var(--teal)',cursor:'pointer',padding:4,background:'none',border:'none',flexShrink:0}}
+        onMouseEnter={e=>e.currentTarget.style.opacity=0.7}
+        onMouseLeave={e=>e.currentTarget.style.opacity=1}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M3 17v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2"/></svg>
+      </button>}
       <button onClick={()=>{const _s=localStorage.getItem('donna-user');if(_s){const _t=JSON.parse(_s).token;if(_t)fetch(API+'/api/auth/logout-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_t})}).catch(()=>{});}localStorage.removeItem('donna-user');window.location.reload();}} title="Sign out" style={{color:'var(--text-3)',cursor:'pointer',padding:4}}
         onMouseEnter={e=>e.currentTarget.style.color='var(--red)'}
         onMouseLeave={e=>e.currentTarget.style.color='var(--text-3)'}>
@@ -863,6 +901,7 @@ function App(){
   const [liveCustomers,setLiveCustomers]=useState([]);
   const [liveTeam,setLiveTeam]=useState(TEAM_STATIC);
   const [teamIdMap,setTeamIdMap]=useState({'talha':'Talha','albaraa':'Al Baraa'});
+  const [customerRefreshKey,setCustomerRefreshKey]=useState(0);
   const [escalations,setEscalations]=useState([]);
   const [liveCustomerMsgs,setLiveCustomerMsgs]=useState([]);
   const [unreadCounts,setUnreadCounts]=useState({});
@@ -893,11 +932,15 @@ function App(){
       }
     };
   },[]);
+  useEffect(()=>{_teamContacts=liveTeam;},[liveTeam]);
   const [toolsOpen,setToolsOpen]=useState(false);
   // Web Push
   const [pushSupported,setPushSupported]=useState(false);
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushLoading,setPushLoading]=useState(false);
+  // PWA Install prompt
+  const [installPrompt,setInstallPrompt]=useState(null);
+  const [installDone,setInstallDone]=useState(()=>!!localStorage.getItem('donna-installed'));
   // Notifications
   const [notifications,setNotifications]=useState([]);
   const [unreadNotifs,setUnreadNotifs]=useState(0);
@@ -942,9 +985,14 @@ function App(){
     const supported='serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
     setPushSupported(supported);
     if(!supported) return;
-    // Restore enabled state from localStorage
+    // Restore enabled state + verify subscription still valid
     const saved=localStorage.getItem('donna-push');
-    if(saved==='on') setPushEnabled(true);
+    if(saved==='on'){
+      setPushEnabled(true);
+      navigator.serviceWorker.ready.then(reg=>reg.pushManager.getSubscription()).then(sub=>{
+        if(!sub){localStorage.removeItem('donna-push');setPushEnabled(false);}
+      }).catch(()=>{});
+    }
   },[]);
 
   async function enablePush(){
@@ -986,6 +1034,14 @@ function App(){
     }finally{setPushLoading(false);}
   }
 
+  // Capture PWA install prompt
+  useEffect(()=>{
+    const handler=e=>{e.preventDefault();setInstallPrompt(e);};
+    window.addEventListener('beforeinstallprompt',handler);
+    window.addEventListener('appinstalled',()=>{setInstallDone(true);setInstallPrompt(null);localStorage.setItem('donna-installed','1');});
+    return ()=>window.removeEventListener('beforeinstallprompt',handler);
+  },[]);
+
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme',isDark?'dark':'light');
     localStorage.setItem('donna-theme',isDark?'dark':'light');
@@ -1003,10 +1059,14 @@ function App(){
     return ()=>clearInterval(id);
   },[]);
 
-  // Browser tab title: show unread count
+  // Browser tab title + PWA badge
   useEffect(()=>{
     const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0)+(unreadNotifs||0);
     document.title=total>0?`(${total}) Donna — Operations`:'Donna — Operations';
+    if('setAppBadge' in navigator){
+      if(total>0) navigator.setAppBadge(total).catch(()=>{});
+      else navigator.clearAppBadge().catch(()=>{});
+    }
   },[unreadCounts,unreadNotifs]);
 
   // URL param handler: notification clicks open the right thread/tool
@@ -1049,6 +1109,7 @@ function App(){
   // Customer list poll
   useEffect(()=>{
     const load=()=>{
+      if(document.visibilityState==='hidden') return;
       fetchApi('/api/customers').then(d=>{
         if(d&&d.customers) setLiveCustomers(d.customers.map(c=>({
           id:c.phone_number,name:c.name||c.phone_number,company:c.company||'',
@@ -1064,12 +1125,13 @@ function App(){
     load();
     const id=setInterval(load,30000);
     return ()=>clearInterval(id);
-  },[]);
+  },[customerRefreshKey]);
 
   // Active customer conversation poll
   useEffect(()=>{
     if(!activeThread||!activeThread.startsWith('+')){setLiveCustomerMsgs([]);return;}
     const load=()=>{
+      if(document.visibilityState==='hidden') return;
       const enc=encodeURIComponent(activeThread);
       fetchApi(`/api/customers/${enc}/conversation`).then(d=>{
         if(d&&d.messages){
@@ -1249,7 +1311,13 @@ function App(){
 
   const prodUrl=(statusData.production_url||'').replace(/^https?:\/\//,'').replace(/\/.*$/,'')||'helpdesk.botsolutions.tech';
 
-  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam};
+  const onInstall=React.useCallback(async()=>{
+    if(!installPrompt) return;
+    installPrompt.prompt();
+    const {outcome}=await installPrompt.userChoice;
+    if(outcome==='accepted'){setInstallDone(true);setInstallPrompt(null);localStorage.setItem('donna-installed','1');}
+  },[installPrompt]);
+  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone};
 
   if(!authChecked)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'var(--bg0)',color:'var(--text-3)',fontSize:13}}>Loading…</div>;
   if(!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
@@ -1321,7 +1389,7 @@ function App(){
               {editingContact===activeThread&&isCustomerThread&&<ContactEditPanel
                 phone={activeCustomer?.phone||activeThread}
                 onClose={()=>setEditingContact(null)}
-                onSave={()=>setEditingContact(null)}
+                onSave={()=>{setEditingContact(null);setCustomerRefreshKey(k=>k+1);}}
               />}
             </div>
             <button onClick={()=>{setShowNotifPanel(o=>!o);if(unreadNotifs>0){authFetch('/api/notifications/read',{method:'POST'}).catch(()=>{});setUnreadNotifs(0);}}} style={{position:'relative',width:34,height:34,borderRadius:7,background:showNotifPanel?'var(--bg3)':'var(--bg2)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',color:'var(--text-2)',flexShrink:0}} title="Notifications">
@@ -1457,8 +1525,10 @@ function App(){
     <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)',
       display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
       <span style={{fontSize:13,fontWeight:600,color:'var(--text-1)'}}>Notifications</span>
-      <button onClick={()=>setShowNotifPanel(false)}
-        style={{color:'var(--text-3)',fontSize:16,cursor:'pointer',background:'none',border:'none',lineHeight:1}}>✕</button>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        {notifications.length>0&&<button onClick={()=>{authFetch('/api/notifications/clear-all',{method:'POST'}).catch(()=>{});setNotifications([]);setUnreadNotifs(0);}} style={{fontSize:10,color:'var(--text-3)',cursor:'pointer',background:'none',border:'1px solid var(--border)',borderRadius:4,padding:'2px 7px',lineHeight:1.5}}>Clear all</button>}
+        <button onClick={()=>setShowNotifPanel(false)} style={{color:'var(--text-3)',fontSize:16,cursor:'pointer',background:'none',border:'none',lineHeight:1}}>✕</button>
+      </div>
     </div>
     <div style={{overflowY:'auto',flex:1}}>
       {notifications.length===0&&<div style={{padding:20,textAlign:'center',
@@ -1468,12 +1538,16 @@ function App(){
           report:'var(--teal)',briefing:'var(--green)',info:'var(--text-3)'}[n.category]||'var(--text-3)';
         return <div key={n.id} style={{padding:'12px 16px',
           borderBottom:'1px solid var(--border)',
-          background:n.read?'transparent':'var(--bg2)'}}>
-          <div style={{fontSize:12,fontWeight:600,color:catColor,marginBottom:3}}>{n.title}</div>
-          {n.body&&<div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.5,
-            whiteSpace:'pre-wrap'}}>{n.body.slice(0,200)}</div>}
-          <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,
-            fontFamily:'var(--mono)'}}>{(n.timestamp||'').slice(0,16)}</div>
+          background:n.read?'transparent':'var(--bg2)',
+          display:'flex',alignItems:'flex-start',gap:8}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12,fontWeight:600,color:catColor,marginBottom:3}}>{n.title}</div>
+            {n.body&&<div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.5,
+              whiteSpace:'pre-wrap'}}>{n.body.slice(0,200)}</div>}
+            <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,
+              fontFamily:'var(--mono)'}}>{(n.timestamp||'').slice(0,16)}</div>
+          </div>
+          <button onClick={()=>{authFetch(`/api/notifications/${n.id}`,{method:'DELETE'}).catch(()=>{});setNotifications(prev=>prev.filter(x=>x.id!==n.id));}} title="Dismiss" style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-3)',fontSize:14,padding:'0 2px',flexShrink:0,lineHeight:1,opacity:0.6}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.6}>✕</button>
         </div>;
       })}
     </div>
