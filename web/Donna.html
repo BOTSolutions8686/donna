@@ -859,6 +859,7 @@ function App(){
   const [intervening,setIntervening]=useState(false);
   const [customerFilter,setCustomerFilter]=useState('all');
   const [statusData,setStatusData]=useState({donna_active:true,last_sync:'—',alerts:0,production_url:''});
+  const [statusFailCount,setStatusFailCount]=useState(0);
   const [liveCustomers,setLiveCustomers]=useState([]);
   const [liveTeam,setLiveTeam]=useState(TEAM_STATIC);
   const [teamIdMap,setTeamIdMap]=useState({'talha':'Talha','albaraa':'Al Baraa'});
@@ -992,12 +993,31 @@ function App(){
 
   useEffect(()=>{setIntervening(false);},[activeThread]);
 
-  // Status poll
+  // Status poll (tracks consecutive failures for offline banner)
   useEffect(()=>{
-    const load=()=>fetchApi('/api/status').then(d=>setStatusData(d)).catch(()=>{});
+    const load=()=>fetchApi('/api/status')
+      .then(d=>{setStatusData(d);setStatusFailCount(0);})
+      .catch(()=>setStatusFailCount(c=>c+1));
     load();
     const id=setInterval(load,60000);
     return ()=>clearInterval(id);
+  },[]);
+
+  // Browser tab title: show unread count
+  useEffect(()=>{
+    const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0)+(unreadNotifs||0);
+    document.title=total>0?`(${total}) Donna — Operations`:'Donna — Operations';
+  },[unreadCounts,unreadNotifs]);
+
+  // URL param handler: notification clicks open the right thread/tool
+  useEffect(()=>{
+    const params=new URLSearchParams(window.location.search);
+    const customer=params.get('customer');
+    const tab=params.get('tab');
+    const tool=params.get('tool');
+    if(customer){setActiveThread(customer);window.history.replaceState({},'','/');return;}
+    if(tab==='reports'){/* open reports - handled by sidebar */}
+    if(tool){setActiveTool(tool);setToolsOpen(true);window.history.replaceState({},'','/');}
   },[]);
 
   // Team members poll (60s interval)
@@ -1245,6 +1265,13 @@ function App(){
   </>;
 
   return <div className="app-shell">
+    {/* Offline banner */}
+    {statusFailCount>=3&&<div style={{position:'fixed',top:0,left:0,right:0,zIndex:1000,
+      background:'var(--red)',color:'#fff',textAlign:'center',padding:'7px 16px',
+      fontSize:12,fontWeight:600,letterSpacing:'0.03em',
+      boxShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>
+      ⚠ Donna is offline — reconnecting…
+    </div>}
     {/* Mobile overlay */}
     <div className={`overlay ${sidebarOpen||toolsOpen?'open':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(false);}}/>
 

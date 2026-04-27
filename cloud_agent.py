@@ -3378,7 +3378,7 @@ async def job_eod_summary(app):
                 send_push_notification(
                     title='📋 EOD Summary Ready',
                     body=f'{len(reports)} report(s) submitted today',
-                    url='/',
+                    url='/?tab=reports',
                     tag='eod-summary',
                 )
             )
@@ -3891,6 +3891,20 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
 
     # ── Build system prompt with pricing context ───────────────────────────────────
     system_prompt = _CUSTOMER_SYSTEM_PROMPT
+    # Contact-type context injection
+    _ct = (contact or {}).get('contact_type', 'customer')
+    if _ct == 'prospect':
+        system_prompt += (
+            '\n\nCONTACT CONTEXT: This person is a PROSPECT (not yet a customer). '
+            'Be warm and showcase BOT Solutions expertise. Encourage booking a demo or call. '
+            'Avoid referencing existing tickets or internal processes.'
+        )
+    elif _ct == 'vendor':
+        system_prompt += (
+            '\n\nCONTACT CONTEXT: This person is a VENDOR or SUPPLIER. '
+            'Be brief and professional. For invoices or procurement queries, '
+            'direct them to accounts@botsolutions.tech.'
+        )
     try:
         pricing = erp.get_pricing_context()
         quots = pricing.get('quotations', [])
@@ -3971,7 +3985,7 @@ async def trigger_escalation(phone_number: str, customer_name: str, reason: str,
         send_push_notification(
             title='🚩 Customer Escalation',
             body=f'{customer_name}: {reason}',
-            url='/',
+            url='/?customer=' + phone_number,
             tag='escalation',
         )
     )
@@ -4149,6 +4163,13 @@ def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = N
             tpl = db.get_template_for_use_case(use_case)
             if tpl:
                 template_doc = tpl['doc_name']
+        # Use Arabic chat_start template if contact language is Arabic
+        _contact_lang = (db.get_contact(to) or {}).get('language', 'en')
+        if _contact_lang == 'ar':
+            _ar_tpl = CONFIG.get('whatsapp_templates', {}).get('chat_start_ar', '')
+            if _ar_tpl:
+                template_doc = _ar_tpl
+                log.debug('Using Arabic template %s for %s', _ar_tpl, to)
         try:
             result = erp.send_whatsapp_template(to, template_doc)
             sent_name = result.get('name') if isinstance(result, dict) else None
@@ -4334,6 +4355,29 @@ async def ask_claude_team(member: dict, message: str) -> str:
 
 
 
+
+
+async def job_takeover_expiry(app):
+    """Auto-expire human takeovers with no outbound activity for 2 hours."""
+    try:
+        stale = db.get_stale_taken_escalations(timeout_hours=2)
+        for esc in stale:
+            try:
+                db.resolve_customer_escalation(esc['id'], 'expired')
+                log.info('Takeover expired for %s (%s) — Donna resumed',
+                         esc['customer_name'], esc['phone_number'])
+                if _telegram_bot and _telegram_talha_chat_id:
+                    asyncio.get_event_loop().create_task(
+                        _telegram_bot.send_message(
+                            chat_id=_telegram_talha_chat_id,
+                            text='⏱ Takeover for %s (%s) auto-expired after 2h inactivity. '
+                                 'Donna has resumed.' % (esc['customer_name'], esc['phone_number'])
+                        )
+                    )
+            except Exception as _te:
+                log.error('Takeover expiry error for %s: %s', esc['phone_number'], _te)
+    except Exception as e:
+        log.error('job_takeover_expiry failed: %s', e)
 
 async def job_whatsapp_inbound_poll(app):
     """Every 2 minutes — poll ERPNext for new incoming WhatsApp messages."""
@@ -4944,7 +4988,7 @@ async def job_zatca_check(app):
                     send_push_notification(
                         title='⚠️ ZATCA Rejection',
                         body=f'{invoice}: {status}',
-                        url='/',
+                        url='/?tool=zatca-status',
                         tag='zatca',
                     )
                 )
@@ -5040,7 +5084,7 @@ async def job_daily_summary(app):
             send_push_notification(
                 title='☀️ Morning Briefing',
                 body='Your daily Donna briefing is ready',
-                url='/',
+                url='/?tab=briefing',
                 tag='daily-briefing',
             )
         )
@@ -5645,19 +5689,61 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
         log.error("WhatsApp processing failed for %s: %s", sender, e, exc_info=True)
 
 
-async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
-    """Receive inbound WhatsApp messages forwarded by ERPNext Frappe Webhook."""
-    # Verify secret
-    secret = request.headers.get("X-Donna-Secret", "")
-    expected = CONFIG.get("whatsapp_webhook", {}).get("secret", "")
-    if secret != expected:
-        log.warning("WhatsApp webhook: bad secret from %s", request.remote)
-        return web.Response(status=403, text="Forbidden")
 
+import hmac as _hmac
+import hashlib as _hashlib
+
+
+def _verify_meta_signature(body: bytes, sig_header: str) -> bool:
+    """Verify Meta webhook X-Hub-Signature-256 HMAC. Returns True if valid or unconfigured."""
+    app_secret = CONFIG.get('meta_whatsapp', {}).get('app_secret', '')
+    if not app_secret:
+        return True  # app_secret not configured — allow through; add it to config.py to enforce
+    if not sig_header.startswith('sha256='):
+        return False
+    expected = _hmac.new(app_secret.encode(), body, _hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(sig_header[7:], expected)
+
+
+async def handle_whatsapp_webhook_verify(request: web.Request) -> web.Response:
+    """Meta webhook verification challenge (GET /whatsapp-incoming)."""
+    mode = request.rel_url.query.get('hub.mode', '')
+    token = request.rel_url.query.get('hub.verify_token', '')
+    challenge = request.rel_url.query.get('hub.challenge', '')
+    expected = CONFIG.get('meta_whatsapp', {}).get('webhook_verify_token', '')
+    if mode == 'subscribe' and token == expected and challenge:
+        log.info('Meta webhook verification OK')
+        return web.Response(text=challenge)
+    log.warning('Meta webhook verification failed: mode=%s token_match=%s', mode, token == expected)
+    return web.Response(status=403, text='Forbidden')
+
+async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
+    """Receive inbound WhatsApp messages (Meta Cloud API native + legacy ERPNext relay)."""
+    # Read body once for HMAC verification
     try:
-        data = await request.json()
+        body_bytes = await request.read()
     except Exception:
-        return web.Response(status=400, text="Bad JSON")
+        return web.Response(status=400, text="Bad request")
+
+    sig_header = request.headers.get('X-Hub-Signature-256', '')
+    if sig_header:
+        # Meta Cloud API path — verify HMAC-SHA256
+        if not _verify_meta_signature(body_bytes, sig_header):
+            log.warning('Meta webhook: invalid HMAC signature from %s', request.remote)
+            return web.Response(status=403, text='Forbidden')
+    else:
+        # Legacy ERPNext relay path — verify X-Donna-Secret
+        secret = request.headers.get('X-Donna-Secret', '')
+        expected_secret = CONFIG.get('whatsapp_webhook', {}).get('secret', '')
+        if expected_secret and secret != expected_secret:
+            log.warning('WhatsApp webhook: bad secret from %s', request.remote)
+            return web.Response(status=403, text='Forbidden')
+
+    import json as _wjson
+    try:
+        data = _wjson.loads(body_bytes)
+    except Exception:
+        return web.Response(status=400, text='Bad JSON')
 
     # Meta Cloud API: delivery receipts + native message format
     if data.get("object") == "whatsapp_business_account":
@@ -5760,6 +5846,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 def _build_webhook_app() -> web.Application:
     app = web.Application()
     app.router.add_post("/whatsapp-incoming", handle_whatsapp_webhook)
+    app.router.add_get("/whatsapp-incoming", handle_whatsapp_webhook_verify)
     # Health check endpoint
     app.router.add_get("/health", lambda r: web.Response(text="donna-ok"))
     return app
@@ -5850,7 +5937,7 @@ def main():
         )
         scheduler.add_job(
             lambda: _run(lambda: job_whatsapp_inbound_poll(app)),
-            "interval", seconds=60, id="whatsapp_inbound_poll",
+            "interval", minutes=5, id="whatsapp_inbound_poll",
         )
         scheduler.add_job(
             lambda: _run(lambda: job_email_check(app)),
@@ -5881,6 +5968,10 @@ def main():
             "interval", minutes=5, id="escalation_check",
         )
         scheduler.add_job(
+            lambda: _run(lambda: job_takeover_expiry(app)),
+            "interval", minutes=30, id="takeover_expiry",
+        )
+        scheduler.add_job(
             lambda: _run(lambda: job_eod_report_request(app)),
             "cron", hour=13, minute=45, id="eod_report_request",
         )
@@ -5902,7 +5993,7 @@ def main():
             "health_check(6am) | collections_escalation(mon 8am) | suggestions_digest(mon 8:15am) | "
             "team_reminders(9:30am daily) | team_accountability(mon 8:30am) | "
             "monthly_pl(1st 9am) | refresh_coa(sun 11pm) | "
-            "whatsapp_poll(60s-fallback) | email_check(30min) | delivery_check(10min) | "
+            "whatsapp_poll(5min-fallback) | email_check(30min) | delivery_check(10min) | takeover_expiry(30min) | "
             "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min)"
         )
 

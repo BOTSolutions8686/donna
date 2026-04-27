@@ -17,6 +17,9 @@ def _conn():
 def init_db():
     """Create all tables if they don't exist."""
     with _conn() as conn:
+        # Enable WAL mode: better concurrent read/write under multiple processes
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS gl_snapshots (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1533,6 +1536,24 @@ def get_all_customers_with_last_message():
     return [dict(r) for r in rows]
 
 
+
+
+def get_stale_taken_escalations(timeout_hours: int = 2) -> list:
+    """Return taken escalations with no human outbound message in the last timeout_hours."""
+    with _conn() as conn:
+        rows = conn.execute("""
+            SELECT ce.id, ce.phone_number, ce.customer_name, ce.assigned_to
+            FROM customer_escalations ce
+            WHERE ce.status = 'taken'
+            AND NOT EXISTS (
+                SELECT 1 FROM customer_conversations cc
+                WHERE cc.phone_number = ce.phone_number
+                AND cc.direction = 'outbound'
+                AND cc.handled_by = 'human'
+                AND cc.timestamp >= datetime('now', '-' || ? || ' hours')
+            )
+        """, (timeout_hours,)).fetchall()
+    return [dict(r) for r in rows]
 
 # ── Session management ────────────────────────────────────────────────────────
 

@@ -834,8 +834,22 @@ async def test_whatsapp_connection(session=Depends(require_auth)):
 
 import logging as _logging
 import re as _re
+import time as _time
 
 _shortcut_log = _logging.getLogger("donna.shortcut")
+
+# Simple in-memory rate limiter: max 10 requests/minute per IP
+_shortcut_hits: dict = {}
+_SHORTCUT_MAX_RPM = 10
+
+def _shortcut_rate_ok(ip: str) -> bool:
+    now = _time.time()
+    hits = [t for t in _shortcut_hits.get(ip, []) if now - t < 60]
+    _shortcut_hits[ip] = hits
+    if len(hits) >= _SHORTCUT_MAX_RPM:
+        return False
+    _shortcut_hits[ip].append(now)
+    return True
 
 
 def _verify_shortcut_key(request: Request) -> bool:
@@ -853,6 +867,11 @@ async def shortcut_ask(request: Request):
     """
     if not _verify_shortcut_key(request):
         return Response("Authentication failed.", media_type="text/plain", status_code=403)
+
+    _client_ip = request.client.host if request.client else "unknown"
+    if not _shortcut_rate_ok(_client_ip):
+        _shortcut_log.warning("Shortcut rate limit hit from %s", _client_ip)
+        return Response("Rate limit exceeded. Try again shortly.", media_type="text/plain", status_code=429)
 
     if _ask_claude_fn is None:
         return Response("Donna is starting up. Try again in a moment.", media_type="text/plain")
