@@ -3606,9 +3606,44 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
     # ── Detect language ───────────────────────────────────────────────────────
     lang = detect_language(content)
 
-    # ── Upsert contact record ─────────────────────────────────────────────────
-    db.upsert_contact(sender_number, language=lang, contact_type='customer')
-    contact = db.get_contact(sender_number)
+    # ── Contact lookup + type gating ─────────────────────────────────────────
+    existing = db.get_contact(sender_number)
+    existing_type = (existing or {}).get('contact_type', 'customer')
+
+    # Blocked contacts: drop silently
+    if existing_type == 'blocked':
+        log.info('Blocked contact %s tried to message — ignoring', sender_number)
+        return
+
+    # Job applicants: redirect to HR, no AI reply
+    if existing_type == 'job_applicant':
+        _hr_reply = (
+            '\u0634\u0643\u0631\u0627\u064b '
+            '\u0644\u0644\u062a\u0648\u0627\u0635\u0644 '
+            '\u0645\u0639\u0646\u0627. '
+            '\u0644\u0644\u062a\u0642\u062f\u0645 '
+            '\u0644\u0644\u0648\u0638\u0627\u0626\u0641\u060c '
+            '\u064a\u0631\u062c\u0649 '
+            '\u0625\u0631\u0633\u0627\u0644 '
+            '\u0633\u064a\u0631\u062a\u0643 '
+            '\u0627\u0644\u0630\u0627\u062a\u064a\u0629 '
+            '\u0625\u0644\u0649 hr@botsolutions.tech'
+            if lang == 'ar' else
+            'Thanks for reaching out! For job applications and internships, '
+            'please email your CV to hr@botsolutions.tech'
+        )
+        try:
+            erp.send_whatsapp(sender_number, _hr_reply)
+            db.log_customer_conversation(sender_number, 'outbound', _hr_reply,
+                                         handled_by='donna', language=lang)
+        except Exception as _hr_err:
+            log.warning('HR redirect send failed for %s: %s', sender_number, _hr_err)
+        return
+
+    # ── Upsert contact record (preserve existing type, don't overwrite blocked/etc.) ─
+    db.upsert_contact(sender_number, language=lang,
+                      contact_type=existing_type if existing else 'customer')
+    contact = existing or db.get_contact(sender_number)
     customer_name = (contact or {}).get('name') or sender_number
 
     # ── Log inbound ───────────────────────────────────────────────────────────

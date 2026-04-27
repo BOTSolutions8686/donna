@@ -681,8 +681,8 @@ async def update_contact(phone: str, request: Request, session=Depends(require_a
         with db._conn() as conn:
             conn.execute("""
                 UPDATE contacts SET
-                    contact_name=COALESCE(NULLIF(?,\'\'),contact_name),
-                    company_name=COALESCE(NULLIF(?,\'\'),company_name),
+                    name=COALESCE(NULLIF(?,\'\'),name),
+                    company=COALESCE(NULLIF(?,\'\'),company),
                     contact_type=?,
                     flagged=?,
                     flag_reason=COALESCE(NULLIF(?,\'\'),flag_reason)

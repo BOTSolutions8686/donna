@@ -562,8 +562,8 @@ function ContactEditPanel({phone,onClose,onSave}){
   React.useEffect(()=>{
     authFetch('/api/contacts/'+encodeURIComponent(phone)).then(d=>{
       if(d&&!d.error) setForm({
-        name:d.contact_name||'',
-        company:d.company_name||'',
+        name:d.name||'',
+        company:d.company||'',
         contact_type:d.contact_type||'customer',
         flagged:d.flagged||0,
         message_count:d.message_count||0,
