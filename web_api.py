@@ -700,6 +700,75 @@ async def unsubscribe_push(request: Request, session=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+# ── Admin conversation (cross-device chat history) ────────────────────────────
+
+@app.get("/api/admin/conversation")
+async def get_admin_conversation_api(session=Depends(require_auth)):
+    username = session.get("username", "admin") if isinstance(session, dict) else "admin"
+    msgs = db.get_admin_conversation(username, limit=50)
+    return JSONResponse({"messages": msgs})
+
+
+@app.post("/api/admin/conversation/log")
+async def log_admin_message_api(request: Request, session=Depends(require_auth)):
+    username = session.get("username", "admin") if isinstance(session, dict) else "admin"
+    try:
+        body = await request.json()
+        direction = body.get("direction", "outbound")
+        content = body.get("content", "")
+        if content:
+            db.log_admin_message(username, direction, content)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+@app.get("/api/notifications")
+async def get_notifications_api(unread: str = "0", session=Depends(require_auth)):
+    unread_only = unread == "1"
+    notifs = db.get_notifications(limit=20, unread_only=unread_only)
+    unread_count = sum(1 for n in notifs if not n["read"])
+    return JSONResponse({"notifications": notifs, "unread": unread_count})
+
+
+@app.post("/api/notifications/read")
+async def mark_notifications_read_api(session=Depends(require_auth)):
+    db.mark_notifications_read()
+    return JSONResponse({"ok": True})
+
+
+# ── Push test ─────────────────────────────────────────────────────────────────
+
+_send_push_fn = None
+
+
+def set_send_push(fn):
+    global _send_push_fn
+    _send_push_fn = fn
+
+
+@app.post("/api/push/test")
+async def test_push_notification(session=Depends(require_auth)):
+    role = session.get("role", "") if isinstance(session, dict) else ""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if _send_push_fn is None:
+        raise HTTPException(status_code=503, detail="Push backend not initialised")
+    try:
+        await _send_push_fn(
+            title="🔔 Donna Test Notification",
+            body="Push notifications are working! You will receive alerts for escalations, ZATCA issues, and EOD reports.",
+            url="/",
+            tag="test",
+        )
+        return JSONResponse({"ok": True, "message": "Test push sent to all subscribed devices"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/reports/daily")
 async def get_daily_reports_api(date: str = None, session=Depends(require_auth)):
     from datetime import date as _date
@@ -722,15 +791,21 @@ class ChatBody(BaseModel):
 
 
 @app.post("/api/chat")
-async def chat(body: ChatBody):
+async def chat(body: ChatBody, session=Depends(require_auth)):
     if _ask_claude_fn is None:
         raise HTTPException(status_code=503, detail="Chat backend not initialised yet")
+    username = session.get("username", "admin") if isinstance(session, dict) else "admin"
     try:
         response = await _ask_claude_fn(
             body.message,
             channel="web",
             sender_name="Talha",
         )
+        try:
+            db.log_admin_message(username, "inbound", body.message)
+            db.log_admin_message(username, "outbound", response)
+        except Exception:
+            pass
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

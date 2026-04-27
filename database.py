@@ -206,6 +206,25 @@ def init_db():
                 active INTEGER DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS admin_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                message_content TEXT NOT NULL,
+                timestamp TEXT DEFAULT (datetime('now')),
+                thread TEXT DEFAULT 'admin'
+            );
+            CREATE INDEX IF NOT EXISTS idx_ac_user ON admin_conversations(username, timestamp);
+
+            CREATE TABLE IF NOT EXISTS donna_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                category TEXT DEFAULT 'info',
+                timestamp TEXT DEFAULT (datetime('now')),
+                read INTEGER DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS pending_context (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_member_number TEXT NOT NULL,
@@ -1721,3 +1740,53 @@ def get_all_push_subscriptions() -> list:
             "SELECT endpoint, p256dh, auth, user_name FROM push_subscriptions WHERE active=1"
         ).fetchall()
     return [dict(r) for r in rows]
+
+# ── Admin conversation (cross-device Donna chat history) ──────────────────────
+
+def log_admin_message(username: str, direction: str, content: str, thread: str = 'admin'):
+    """Log a message in the admin Donna chat thread."""
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO admin_conversations (username, direction, message_content, thread)
+            VALUES (?, ?, ?, ?)
+        """, (username, direction, content, thread))
+
+
+def get_admin_conversation(username: str, limit: int = 50) -> list:
+    """Get recent admin chat messages."""
+    with _conn() as conn:
+        rows = conn.execute("""
+            SELECT direction, message_content, timestamp
+            FROM admin_conversations
+            WHERE username=? AND thread='admin'
+            ORDER BY timestamp DESC LIMIT ?
+        """, (username, limit)).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+# ── Donna notifications (web UI notification panel) ───────────────────────────
+
+def add_notification(title: str, body: str, category: str = 'info'):
+    """Store a notification for display in the web UI."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO donna_notifications (title, body, category) VALUES (?,?,?)",
+            (title, body, category)
+        )
+
+
+def get_notifications(limit: int = 20, unread_only: bool = False) -> list:
+    """Return recent notifications."""
+    with _conn() as conn:
+        q = "SELECT * FROM donna_notifications"
+        if unread_only:
+            q += " WHERE read=0"
+        q += " ORDER BY timestamp DESC LIMIT ?"
+        rows = conn.execute(q, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_notifications_read():
+    """Mark all notifications as read."""
+    with _conn() as conn:
+        conn.execute("UPDATE donna_notifications SET read=1 WHERE read=0")

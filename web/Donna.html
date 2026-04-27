@@ -686,13 +686,7 @@ function App(){
   },[]);
   const [isDark,setIsDark]=useState(()=>localStorage.getItem('donna-theme')!=='light');
   const [activeThread,setActiveThread]=useState('donna');
-  const [threads,setThreads]=useState(()=>{
-    try{
-      const saved=sessionStorage.getItem('donna-threads');
-      if(saved){const parsed=JSON.parse(saved);if(parsed&&parsed.donna&&parsed.donna.length>1)return parsed;}
-    }catch(e){}
-    return makeInitialThreads();
-  });
+  const [threads,setThreads]=useState(makeInitialThreads);
   const [input,setInput]=useState('');
   const [typing,setTyping]=useState(false);
   const [activeTool,setActiveTool]=useState(null);
@@ -737,9 +731,42 @@ function App(){
   const [pushSupported,setPushSupported]=useState(false);
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushLoading,setPushLoading]=useState(false);
+  // Notifications
+  const [notifications,setNotifications]=useState([]);
+  const [unreadNotifs,setUnreadNotifs]=useState(0);
+  const [showNotifPanel,setShowNotifPanel]=useState(false);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
   const lastApiMsgCountRef=useRef({});
+
+  // Load admin conversation history from server on login
+  useEffect(()=>{
+    if(!loggedIn) return;
+    authFetch('/api/admin/conversation').then(d=>{
+      if(d&&d.messages&&d.messages.length>0){
+        const msgs=d.messages.map((m,i)=>({
+          id:'hist_'+i,
+          from:m.direction==='inbound'?'user':'donna',
+          text:m.message_content||'',
+          ts:(m.timestamp||'').slice(11,16),
+        }));
+        setThreads(prev=>({...prev,donna:[...msgs]}));
+      }
+    }).catch(()=>{});
+  },[loggedIn]);
+
+  // Poll notifications every 30s
+  useEffect(()=>{
+    if(!loggedIn) return;
+    const load=()=>{
+      authFetch('/api/notifications').then(d=>{
+        if(d){setNotifications(d.notifications||[]);setUnreadNotifs(d.unread||0);}
+      }).catch(()=>{});
+    };
+    load();
+    const id=setInterval(load,30000);
+    return ()=>clearInterval(id);
+  },[loggedIn]);
 
   // Web Push init
   useEffect(()=>{
@@ -920,9 +947,17 @@ function App(){
   const addMessage=useCallback((threadId,msg)=>{
     setThreads(prev=>{
       const updated={...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]};
-      try{sessionStorage.setItem('donna-threads',JSON.stringify(updated));}catch(e){}
       return updated;
     });
+    // Persist donna thread messages to server for cross-device sync
+    if(threadId==='donna'&&msg.text&&!msg.apiToolId){
+      const direction=msg.from==='user'?'inbound':'outbound';
+      authFetch('/api/admin/conversation/log',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({direction,content:msg.text})
+      }).catch(()=>{});
+    }
   },[]);
 
   const isTeamThread=!!teamIdMap[activeThread];
@@ -950,6 +985,20 @@ function App(){
     if(!input.trim())return;
     const text=input.trim();
     setInput('');
+    // Special command: test push notification
+    if(text.toLowerCase()==='test push'&&loggedIn?.role==='admin'){
+      addMessage('donna',{from:'user',text,ts:nowStr()});
+      try{
+        const r=await authFetch('/api/push/test',{method:'POST'});
+        addMessage('donna',{from:'donna',
+          text:r.ok?'✅ Test push sent to all subscribed devices. Check your device!':
+               'Push test failed: '+(r.error||'unknown error'),
+          ts:nowStr()});
+      }catch(e){
+        addMessage('donna',{from:'donna',text:'Push test error: '+e.message,ts:nowStr()});
+      }
+      return;
+    }
     if((isCustomerThread||isTeamThread)&&intervening){
       if(isCustomerThread&&activeCustomer){
         try{
@@ -1070,6 +1119,13 @@ function App(){
                 <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadSub}</span>
               </div>
             </div>
+            <button onClick={()=>{setShowNotifPanel(o=>!o);if(unreadNotifs>0){authFetch('/api/notifications/read',{method:'POST'}).catch(()=>{});setUnreadNotifs(0);}}} style={{position:'relative',width:34,height:34,borderRadius:7,background:showNotifPanel?'var(--bg3)':'var(--bg2)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',color:'var(--text-2)',flexShrink:0}} title="Notifications">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2z" fill={unreadNotifs>0?'var(--amber)':'currentColor'} opacity={unreadNotifs>0?1:0.4}/>
+                <path d="M18 16v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" stroke="currentColor" strokeWidth="1.5" fill={unreadNotifs>0?'var(--amber-dim)':'none'}/>
+              </svg>
+              {unreadNotifs>0&&<span style={{position:'absolute',top:5,right:5,width:7,height:7,borderRadius:'50%',background:'var(--red)',border:'2px solid var(--bg1)'}}/>}
+            </button>
             <div className="header-user-pill" style={{display:'flex',alignItems:'center',gap:7,padding:'5px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,flexShrink:0}}>
               <div style={{width:22,height:22,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:'var(--teal)'}}>{loggedIn.initials}</div>
               <div style={{fontSize:11,fontWeight:600,color:'var(--text-1)'}}>{loggedIn.name}</div>
@@ -1185,6 +1241,36 @@ function App(){
         {loggedIn.initials}
       </button>}
     </div>
+  {showNotifPanel&&<div style={{
+    position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
+    background:'var(--bg1)',border:'1px solid var(--border-hi)',
+    borderRadius:12,boxShadow:'0 8px 40px rgba(0,0,0,0.6)',
+    zIndex:400,overflow:'hidden',maxHeight:480,display:'flex',flexDirection:'column'
+  }}>
+    <div style={{padding:'12px 16px',borderBottom:'1px solid var(--border)',
+      display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+      <span style={{fontSize:13,fontWeight:600,color:'var(--text-1)'}}>Notifications</span>
+      <button onClick={()=>setShowNotifPanel(false)}
+        style={{color:'var(--text-3)',fontSize:16,cursor:'pointer',background:'none',border:'none',lineHeight:1}}>✕</button>
+    </div>
+    <div style={{overflowY:'auto',flex:1}}>
+      {notifications.length===0&&<div style={{padding:20,textAlign:'center',
+        color:'var(--text-3)',fontSize:13}}>No notifications yet</div>}
+      {notifications.map(n=>{
+        const catColor={alert:'var(--red)',warning:'var(--amber)',
+          report:'var(--teal)',briefing:'var(--green)',info:'var(--text-3)'}[n.category]||'var(--text-3)';
+        return <div key={n.id} style={{padding:'12px 16px',
+          borderBottom:'1px solid var(--border)',
+          background:n.read?'transparent':'var(--bg2)'}}>
+          <div style={{fontSize:12,fontWeight:600,color:catColor,marginBottom:3}}>{n.title}</div>
+          {n.body&&<div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.5,
+            whiteSpace:'pre-wrap'}}>{n.body.slice(0,200)}</div>}
+          <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,
+            fontFamily:'var(--mono)'}}>{(n.timestamp||'').slice(0,16)}</div>
+        </div>;
+      })}
+    </div>
+  </div>}
   </div>;
 }
 

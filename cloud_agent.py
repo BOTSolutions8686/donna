@@ -5323,6 +5323,25 @@ def _split_message(text: str) -> list[str]:
 
 async def _send(bot_or_update, text: str, chat_id: int = None):
     """Send a message, splitting into multiple parts if over 4096 chars."""
+    # Log to web UI notifications panel
+    try:
+        _full = (text or '').strip()
+        if _full:
+            _cat = 'info'
+            if any(w in _full for w in ['🔴', 'escalation', 'URGENT', 'urgent', '🚩']):
+                _cat = 'alert'
+            elif any(w in _full for w in ['⚠️', 'ZATCA', 'zatca', 'warning', 'rejection', 'Rejection']):
+                _cat = 'warning'
+            elif any(w in _full for w in ['📋', 'EOD', 'report', 'Report']):
+                _cat = 'report'
+            elif any(w in _full for w in ['☀️', 'morning', 'Morning', 'briefing', 'Briefing']):
+                _cat = 'briefing'
+            _lines = _full.split('\n')
+            _title = _lines[0][:80].replace('*', '').replace('_', '')
+            _body = '\n'.join(_lines[1:])[:500] if len(_lines) > 1 else ''
+            db.add_notification(_title, _body, _cat)
+    except Exception:
+        pass
     chunks = _split_message(text or "Done.")
     for i, chunk in enumerate(chunks):
         if hasattr(bot_or_update, "message"):
@@ -5611,7 +5630,13 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
     whitelist = {w["number"]: w["name"]
                  for w in CONFIG.get("communication", {}).get("whatsapp_whitelist", [])}
     if sender not in whitelist:
-        log.info("WhatsApp from non-whitelisted %s — ignored", sender)
+        # Unknown number — treat as customer, not team member
+        log.info("WhatsApp from unknown number %s — routing to customer handler", sender)
+        if not message:
+            return web.Response(status=200, text="ok")
+        asyncio.get_event_loop().create_task(
+            handle_customer_message(sender, message, wa_name=None)
+        )
         return web.Response(status=200, text="ok")
 
     # For audio messages, pass the file path/url for transcription
@@ -5765,6 +5790,7 @@ def main():
         )
         # ── Donna web dashboard ──────────────────────────────────────────────────
         web_api.set_ask_claude(ask_claude)
+        web_api.set_send_push(send_push_notification)
         _uvicorn_config = uvicorn.Config(web_api.app, host="0.0.0.0", port=8080, log_level="warning")
         _uvicorn_server = uvicorn.Server(_uvicorn_config)
         asyncio.get_event_loop().create_task(_uvicorn_server.serve())
