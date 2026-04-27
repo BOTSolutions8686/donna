@@ -1325,9 +1325,19 @@ def upsert_contact(phone_number, name=None, company=None, language=None,
 
 
 def get_contact(phone_number):
-    """Get a contact record by phone number, or None."""
+    """Get a contact record with inbound message_count, or None."""
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM contacts WHERE phone_number=?", (phone_number,)).fetchone()
+        row = conn.execute(
+            """SELECT c.*, COALESCE(m.msg_count,0) as message_count
+               FROM contacts c
+               LEFT JOIN (
+                   SELECT phone_number, COUNT(*) as msg_count
+                   FROM customer_conversations WHERE direction='inbound'
+                   GROUP BY phone_number
+               ) m ON m.phone_number=c.phone_number
+               WHERE c.phone_number=?""",
+            (phone_number,)
+        ).fetchone()
     return dict(row) if row else None
 
 

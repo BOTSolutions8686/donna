@@ -118,11 +118,16 @@ async def serve_manifest():
         "orientation": "portrait-primary",
         "icons": [
             {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},
-            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+        "shortcuts": [
+            {"name": "Customers", "url": "/", "description": "View customer conversations"},
         ],
         "categories": ["business", "productivity"],
         "lang": "en",
         "scope": "/",
+        "prefer_related_applications": False,
     }
     return JSONResponse(manifest, headers={
         "Content-Type": "application/manifest+json",
@@ -132,7 +137,7 @@ async def serve_manifest():
 
 @app.get("/sw.js")
 async def serve_sw():
-    sw = "const CACHE='donna-v3';\nconst SHELL=['/'];\n\nself.addEventListener('install',e=>{\n  e.waitUntil(\n    caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())\n  );\n});\n\nself.addEventListener('activate',e=>{\n  e.waitUntil(\n    caches.keys()\n      .then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))))\n      .then(()=>self.clients.claim())\n  );\n});\n\nself.addEventListener('fetch',e=>{\n  const u=e.request.url;\n  if(u.includes('/api/')||u.includes('/auth')){\n    e.respondWith(\n      fetch(e.request).catch(()=>\n        new Response(JSON.stringify({error:'offline'}),\n          {headers:{'Content-Type':'application/json'}})\n      )\n    );\n    return;\n  }\n  e.respondWith(\n    fetch(e.request).then(r=>{\n      if(r&&r.ok&&r.type==='basic'){\n        const c=r.clone();\n        caches.open(CACHE).then(ca=>ca.put(e.request,c));\n      }\n      return r;\n    }).catch(()=>\n      caches.match(e.request).then(r=>r||caches.match('/'))\n    )\n  );\n});\n\nself.addEventListener('push',e=>{\n  if(!e.data) return;\n  let data;\n  try{ data=e.data.json(); }\n  catch{ data={title:'Donna',body:e.data.text(),url:'/'}; }\n  const title=data.title||'Donna — Operations AI';\n  const options={\n    body:data.body||'',\n    icon:data.icon||'/icon.svg',\n    badge:'/icon.svg',\n    tag:data.tag||'donna',\n    data:{url:data.url||'/'},\n    requireInteraction:false,\n    silent:false,\n    vibrate:[100,50,100],\n    timestamp:data.timestamp||Date.now(),\n    actions:[\n      {action:'open',title:'Open Donna'},\n      {action:'dismiss',title:'Dismiss'},\n    ]\n  };\n  e.waitUntil(self.registration.showNotification(title,options));\n});\n\nself.addEventListener('notificationclick',e=>{\n  e.notification.close();\n  if(e.action==='dismiss') return;\n  const url=e.notification.data?.url||'/';\n  e.waitUntil(\n    clients.matchAll({type:'window',includeUncontrolled:true}).then(cls=>{\n      for(const c of cls){\n        if(c.url.includes('donna.botsolutions.tech')&&'focus' in c){\n          return c.focus().then(wc=>wc.navigate(url));\n        }\n      }\n      if(clients.openWindow) return clients.openWindow('https://donna.botsolutions.tech'+url);\n    })\n  );\n});\n"
+    sw = "const CACHE='donna-v4';\nconst SHELL=['/','/offline'];\n\nself.addEventListener('install',e=>{\n  e.waitUntil(\n    caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())\n  );\n});\n\nself.addEventListener('activate',e=>{\n  e.waitUntil(\n    caches.keys()\n      .then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))))\n      .then(()=>self.clients.claim())\n  );\n});\n\nself.addEventListener('fetch',e=>{\n  const u=e.request.url;\n  if(u.includes('/api/')||u.includes('/auth')){\n    e.respondWith(\n      fetch(e.request).catch(()=>\n        new Response(JSON.stringify({error:'offline'}),\n          {headers:{'Content-Type':'application/json'}})\n      )\n    );\n    return;\n  }\n  if(e.request.mode==='navigate'){\n    e.respondWith(\n      fetch(e.request).then(r=>{\n        if(r&&r.ok){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c));}\n        return r;\n      }).catch(()=>\n        caches.match(e.request)\n          .then(r=>r||caches.match('/'))\n          .then(r=>r||caches.match('/offline'))\n      )\n    );\n    return;\n  }\n  e.respondWith(\n    caches.match(e.request).then(cached=>{\n      const network=fetch(e.request).then(r=>{\n        if(r&&r.ok&&r.type==='basic'){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c));}\n        return r;\n      });\n      return cached||network;\n    })\n  );\n});\n\nself.addEventListener('push',e=>{\n  if(!e.data) return;\n  let data;\n  try{ data=e.data.json(); }\n  catch{ data={title:'Donna',body:e.data.text(),url:'/'}; }\n  const title=data.title||'Donna — Operations AI';\n  const options={\n    body:data.body||'',\n    icon:data.icon||'/icon.svg',\n    badge:'/icon.svg',\n    tag:data.tag||'donna',\n    data:{url:data.url||'/'},\n    requireInteraction:false,\n    silent:false,\n    vibrate:[100,50,100],\n    timestamp:data.timestamp||Date.now(),\n    actions:[\n      {action:'open',title:'Open Donna'},\n      {action:'dismiss',title:'Dismiss'},\n    ]\n  };\n  e.waitUntil(self.registration.showNotification(title,options));\n});\n\nself.addEventListener('notificationclick',e=>{\n  e.notification.close();\n  if(e.action==='dismiss') return;\n  const url=e.notification.data?.url||'/';\n  e.waitUntil(\n    clients.matchAll({type:'window',includeUncontrolled:true}).then(cls=>{\n      for(const c of cls){\n        if(c.url.includes('donna.botsolutions.tech')&&'focus' in c){\n          return c.focus().then(wc=>wc.navigate(url));\n        }\n      }\n      if(clients.openWindow) return clients.openWindow('https://donna.botsolutions.tech'+url);\n    })\n  );\n});\n"
     return Response(sw, media_type="application/javascript", headers={
         "Cache-Control": "no-cache, no-store, must-revalidate",
     })
@@ -154,6 +159,40 @@ async def serve_icon_svg():
 @app.get("/icon-192.png")
 async def serve_icon_192():
     return RedirectResponse("/icon.svg")
+
+@app.get("/icon-512.png")
+async def serve_icon_512():
+    return RedirectResponse("/icon.svg")
+
+@app.get("/offline")
+async def serve_offline():
+    body = (
+        "<!DOCTYPE html><html lang='en'><head>"
+        "<meta charset='UTF-8'/>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
+        "<meta name='theme-color' content='#0ec4b4'/>"
+        "<title>Donna — Offline</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0;}"
+        "body{background:#060d1a;color:#7a96b8;font-family:system-ui,sans-serif;"
+        "display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;}"
+        ".card{text-align:center;max-width:320px;}"
+        ".logo{width:64px;height:64px;border-radius:16px;background:#0ec4b4;"
+        "display:flex;align-items:center;justify-content:center;margin:0 auto 20px;"
+        "font-size:28px;font-weight:700;color:#060d1a;}"
+        "h1{font-size:20px;font-weight:600;color:#e2eaf5;margin-bottom:8px;}"
+        "p{font-size:14px;line-height:1.6;margin-bottom:20px;}"
+        "button{background:#0ec4b4;color:#060d1a;border:none;border-radius:8px;"
+        "padding:12px 24px;font-size:14px;font-weight:600;cursor:pointer;}"
+        "</style></head><body>"
+        "<div class='card'>"
+        "<div class='logo'>D</div>"
+        "<h1>Donna is Offline</h1>"
+        "<p>No network connection right now. Check your signal and try again.</p>"
+        "<button onclick='window.location.reload()'>Try Again</button>"
+        "</div></body></html>"
+    )
+    return Response(body, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 @app.post("/api/auth/login")
 async def login(body: LoginBody):

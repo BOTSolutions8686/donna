@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black"/>
 <meta name="apple-mobile-web-app-title" content="Donna"/>
+<link rel="apple-touch-startup-image" href="/icon.svg"/>
 <meta name="theme-color" content="#0ec4b4" media="(prefers-color-scheme: dark)"/>
 <meta name="theme-color" content="#0ec4b4" media="(prefers-color-scheme: light)"/>
 <link rel="manifest" href="/manifest.json"/>
@@ -76,6 +77,7 @@ input,textarea{font-family:var(--sans);}
     transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
     box-shadow:4px 0 40px rgba(0,0,0,0.7);
     display:flex;flex-direction:column;
+    will-change:transform;overscroll-behavior:contain;
   }
   .sidebar.open{transform:translateX(0);}
 
@@ -99,6 +101,7 @@ input,textarea{font-family:var(--sans);}
     transition:transform 0.32s cubic-bezier(0.4,0,0.2,1);
     background:var(--bg1);overflow:hidden;
     display:flex;flex-direction:column;
+    will-change:transform;overscroll-behavior:contain;
   }
   .tools-panel.open{transform:translateY(0);}
 
@@ -123,7 +126,7 @@ input,textarea{font-family:var(--sans);}
 
   /* Chat */
   .chat-messages{padding:12px 10px;}
-  .msg-bubble{max-width:90%;}
+  .msg-bubble{max-width:90%;word-break:break-word;overflow-wrap:break-word;}
 
   /* Input area */
   .chat-input-area{
@@ -139,6 +142,13 @@ input,textarea{font-family:var(--sans);}
 
   /* Header */
   .app-header{padding:0 10px;}
+
+  /* Keyboard-aware layout: shrink shell by keyboard offset */
+  .app-shell{height:calc(100dvh - var(--keyboard-offset,0px));transition:height 0.1s ease;}
+
+  /* Bigger tap targets on nav buttons */
+  .mob-nav{height:60px;}
+  .mob-nav-btn{padding:6px 2px;min-width:48px;}
 }
 
 /* Desktop: never show overlay */
@@ -150,6 +160,7 @@ input,textarea{font-family:var(--sans);}
 @supports(padding:env(safe-area-inset-bottom)){
   .mob-nav{padding-bottom:env(safe-area-inset-bottom);}
   .chat-input-area{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
+  .sidebar .sidebar-header-inner{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right));}
 }
 
 /* Tablet */
@@ -941,6 +952,10 @@ function App(){
   // PWA Install prompt
   const [installPrompt,setInstallPrompt]=useState(null);
   const [installDone,setInstallDone]=useState(()=>!!localStorage.getItem('donna-installed'));
+  // iOS: detect non-standalone mode to show manual install instructions
+  const _isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent||'');
+  const _isStandalone=()=>window.navigator.standalone===true||window.matchMedia('(display-mode:standalone)').matches;
+  const [showIOSBanner,setShowIOSBanner]=useState(()=>_isIOS()&&!_isStandalone()&&!localStorage.getItem('donna-installed')&&!localStorage.getItem('donna-ios-banner-dismissed'));
   // Notifications
   const [notifications,setNotifications]=useState([]);
   const [unreadNotifs,setUnreadNotifs]=useState(0);
@@ -1340,8 +1355,19 @@ function App(){
       boxShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>
       ⚠ Donna is offline — reconnecting…
     </div>}
+    {/* iOS install banner */}
+    {showIOSBanner&&!installDone&&<div className="ios-install-banner">
+      <div className="ios-install-banner-icon" style={{width:44,height:44,borderRadius:10,background:'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+        <svg width="22" height="22" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="7.5" r="3" fill="#000" opacity="0.9"/><circle cx="7.5" cy="7.5" r="6.5" stroke="#000" strokeWidth="1.2" opacity="0.6"/></svg>
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        <strong style={{display:'block',fontSize:13,color:'var(--text-1)',fontWeight:600}}>Install Donna</strong>
+        <span style={{fontSize:11,color:'var(--text-3)',lineHeight:1.4}}>Tap <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{verticalAlign:'middle',display:'inline'}}><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13"/></svg> then <em>Add to Home Screen</em></span>
+      </div>
+      <button onClick={()=>{setShowIOSBanner(false);localStorage.setItem('donna-ios-banner-dismissed','1');}} style={{color:'var(--text-3)',background:'none',border:'none',cursor:'pointer',fontSize:18,padding:4,flexShrink:0}}>✕</button>
+    </div>}
     {/* Mobile overlay */}
-    <div className={`overlay ${sidebarOpen||toolsOpen?'open':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(false);}}/>
+    <div className={`overlay ${sidebarOpen||toolsOpen?'open':''}`} onClick={()=>{setSidebarOpen(false);setToolsOpen(false);}}/> 
 
     <div className="app-body">
       {/* Sidebar */}
@@ -1543,7 +1569,7 @@ function App(){
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:12,fontWeight:600,color:catColor,marginBottom:3}}>{n.title}</div>
             {n.body&&<div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.5,
-              whiteSpace:'pre-wrap'}}>{n.body.slice(0,200)}</div>}
+              whiteSpace:'pre-wrap'}}>{n.body.slice(0,600)}</div>}
             <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,
               fontFamily:'var(--mono)'}}>{(n.timestamp||'').slice(0,16)}</div>
           </div>
