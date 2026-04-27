@@ -671,68 +671,141 @@ def send_email(to, subject, message, reference_doctype="", reference_name=""):
     return r.json().get("message", {})
 
 
-def send_whatsapp(to, message):
-    """Send a WhatsApp message via frappe_whatsapp by creating a WhatsApp Message document."""
-    # frappe_whatsapp expects the number without leading +
-    to_clean = to.lstrip("+")
-    doc = {
-        "doctype": "WhatsApp Message",
-        "type": "Outgoing",
-        "to": to_clean,
-        "message": message,
-        "message_type": "Manual",
-        "content_type": "text",
+# ── Meta Cloud API direct client ─────────────────────────────────────────────
+import requests as _meta_requests
+import logging as _meta_log
+
+_wa_log = _meta_log.getLogger('donna')
+
+
+def _meta_headers():
+    """Return auth headers for Meta Cloud API."""
+    token = CONFIG.get('meta_whatsapp', {}).get('access_token', '')
+    return {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
     }
-    result = save_doc(doc)
-    return result
 
 
-def get_whatsapp_templates(limit=50):
-    """List available WhatsApp templates."""
-    return get_list(
-        "WhatsApp Templates",
-        filters=[["status", "=", "APPROVED"]],
-        fields=["name", "template_name", "language", "status"],
-        limit=limit,
+def _meta_url(path=''):
+    """Build Meta API URL for the configured phone number."""
+    cfg = CONFIG.get('meta_whatsapp', {})
+    version = cfg.get('api_version', 'v23.0')
+    phone_id = cfg.get('phone_number_id', '')
+    base = cfg.get('base_url', 'https://graph.facebook.com')
+    return f'{base}/{version}/{phone_id}{path}'
+
+
+def send_whatsapp(to: str, message: str) -> dict:
+    """
+    Send a free-form WhatsApp message directly via Meta Cloud API.
+    Only works within the 24h customer-initiated session window.
+    Returns dict with wamid on success.
+    """
+    to_clean = to.lstrip('+')
+    payload = {
+        'messaging_product': 'whatsapp',
+        'recipient_type': 'individual',
+        'to': to_clean,
+        'type': 'text',
+        'text': {'body': message, 'preview_url': False},
+    }
+    r = _meta_requests.post(
+        _meta_url('/messages'),
+        headers=_meta_headers(),
+        json=payload,
+        timeout=15,
     )
+    if r.status_code == 200:
+        data = r.json()
+        wamid = data.get('messages', [{}])[0].get('id', '')
+        return {'name': wamid, 'wamid': wamid, 'status': 'sent'}
+    else:
+        _wa_log.error('Meta WA send failed %s: %s', r.status_code, r.text[:200])
+        raise Exception(f'Meta API error {r.status_code}: {r.text[:200]}')
 
 
-def send_whatsapp_template(to, template_name, parameters=None):
-    """Send a WhatsApp template message. parameters = list of text values for {{1}}, {{2}}, etc."""
-    import json as _json
-    to_clean = to.lstrip("+")
+def get_whatsapp_templates(limit: int = 50) -> list:
+    """
+    Fetch approved WhatsApp templates directly from Meta Business API.
+    Returns list of dicts with template_name, status, language.
+    """
+    cfg = CONFIG.get('meta_whatsapp', {})
+    business_id = cfg.get('business_id', '')
+    version = cfg.get('api_version', 'v23.0')
+    base = cfg.get('base_url', 'https://graph.facebook.com')
+    r = _meta_requests.get(
+        f'{base}/{version}/{business_id}/message_templates',
+        headers=_meta_headers(),
+        params={
+            'limit': limit,
+            'status': 'APPROVED',
+            'fields': 'name,status,language,components',
+        },
+        timeout=15,
+    )
+    if r.status_code == 200:
+        templates = r.json().get('data', [])
+        return [
+            {
+                'template_name': t.get('name', ''),
+                'language': t.get('language', 'en'),
+                'status': t.get('status', ''),
+                'name': t.get('name', ''),
+            }
+            for t in templates
+        ]
+    _wa_log.warning('get_whatsapp_templates failed %s: %s', r.status_code, r.text[:100])
+    return []
+
+
+def send_whatsapp_template(to: str, template_name: str,
+                           parameters: list = None,
+                           language_code: str = 'en') -> dict:
+    """
+    Send a WhatsApp template message directly via Meta Cloud API.
+    Works outside the 24h session window.
+    parameters = list of text strings for {{1}}, {{2}}, etc.
+    """
+    to_clean = to.lstrip('+')
     components = []
     if parameters:
         components.append({
-            "type": "body",
-            "parameters": [{"type": "text", "text": str(p)} for p in parameters],
+            'type': 'body',
+            'parameters': [{'type': 'text', 'text': str(p)} for p in parameters],
         })
-    message_payload = {
-        "name": template_name,
-        "language": {"code": "en_US"},
-        "components": components,
+    payload = {
+        'messaging_product': 'whatsapp',
+        'to': to_clean,
+        'type': 'template',
+        'template': {
+            'name': template_name,
+            'language': {'code': language_code},
+            'components': components,
+        },
     }
-    doc = {
-        "doctype": "WhatsApp Message",
-        "type": "Outgoing",
-        "to": to_clean,
-        "message": _json.dumps(message_payload),
-        "message_type": "Template",
-        "content_type": "text",
-        "use_template": 1,
-        "template": template_name,
-    }
-    result = save_doc(doc)
-    return result
+    r = _meta_requests.post(
+        _meta_url('/messages'),
+        headers=_meta_headers(),
+        json=payload,
+        timeout=15,
+    )
+    if r.status_code == 200:
+        data = r.json()
+        wamid = data.get('messages', [{}])[0].get('id', '')
+        return {'name': wamid, 'wamid': wamid, 'status': 'sent'}
+    else:
+        _wa_log.error('Meta WA template failed %s: %s', r.status_code, r.text[:200])
+        raise Exception(f'Meta template error {r.status_code}: {r.text[:200]}')
 
 
-def check_delivery_status(doc_name):
-    """Return the delivery status of a WhatsApp Message doc (delivered/read/failed/None)."""
-    try:
-        doc = get_doc("WhatsApp Message", doc_name)
-        return doc.get("status")
-    except Exception:
-        return None
+def check_delivery_status(wamid: str) -> str:
+    """
+    Delivery status is now tracked via Meta webhooks (not polling).
+    Status is stored in DB via update_delivery_status.
+    This function is kept for backward compatibility.
+    """
+    return None
 
 
 

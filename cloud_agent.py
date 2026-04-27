@@ -5624,7 +5624,57 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
     except Exception:
         return web.Response(status=400, text="Bad JSON")
 
-    # Only process incoming messages
+    # Meta Cloud API: delivery receipts + native message format
+    if data.get("object") == "whatsapp_business_account":
+        try:
+            entry = data.get("entry", [{}])[0]
+            value = entry.get("changes", [{}])[0].get("value", {})
+            for su in value.get("statuses", []):
+                wamid = su.get("id", "")
+                dst = su.get("status", "")
+                if wamid and dst:
+                    db.update_delivery_status(wamid, dst)
+                    log.debug("WA delivery: %s -> %s", wamid[:20], dst)
+                    if dst == "failed":
+                        errs = su.get("errors", [])
+                        emsg = errs[0].get("message", "unknown") if errs else "unknown"
+                        log.warning("WA delivery failed for %s: %s", wamid[:20], emsg)
+                        if _telegram_bot and _telegram_talha_chat_id:
+                            alert = "\u26a0\ufe0f WA delivery failed\nID: " + wamid[:20] + "\nReason: " + emsg
+                            asyncio.get_event_loop().create_task(
+                                _telegram_bot.send_message(
+                                    chat_id=_telegram_talha_chat_id, text=alert
+                                )
+                            )
+            meta_msgs = value.get("messages", [])
+            if meta_msgs:
+                for mm in meta_msgs:
+                    sr = mm.get("from", "").strip()
+                    if not sr:
+                        continue
+                    sm = "+" + sr.lstrip("+")
+                    mt = mm.get("type", "text")
+                    if mt == "text":
+                        cm = mm.get("text", {}).get("body", "").strip()
+                    elif mt == "audio":
+                        cm = "__AUDIO__:" + mm.get("audio", {}).get("id", "")
+                    else:
+                        cm = "[" + mt + " attachment]"
+                    if not cm:
+                        continue
+                    wl = {w["number"]: w["name"] for w in CONFIG.get("communication", {}).get("whatsapp_whitelist", [])}
+                    if sm not in wl:
+                        log.info("Meta WA from unknown %s - routing to customer", sm)
+                        asyncio.get_event_loop().create_task(handle_customer_message(sm, cm, wa_name=None))
+                    else:
+                        asyncio.get_event_loop().create_task(_process_whatsapp_message(sm, wl[sm], cm))
+                return web.Response(status=200, text="ok")
+            if value.get("statuses"):
+                return web.Response(status=200, text="ok")
+        except Exception as _me:
+            log.debug("Meta webhook parse: %s", _me)
+
+    # Legacy frappe_whatsapp relay format
     msg_type = data.get("type", "")
     if msg_type != "Incoming":
         return web.Response(status=200, text="ok")

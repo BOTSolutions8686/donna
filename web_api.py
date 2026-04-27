@@ -701,6 +701,88 @@ async def unsubscribe_push(request: Request, session=Depends(require_auth)):
 
 
 
+# ── WhatsApp / Meta Settings ──────────────────────────────────────────────────
+
+import logging as _wa_settings_log
+_wslog = _wa_settings_log.getLogger("donna.settings")
+
+
+def _persist_config_field(field: str, value):
+    """Update a CONFIG field in memory. Manual config.py edit required to persist across restart."""
+    _wslog.info("Config field '%s' updated in memory. Edit config.py to persist.", field)
+
+
+@app.get("/api/settings/whatsapp")
+async def get_whatsapp_settings(session=Depends(require_auth)):
+    cfg = CONFIG.get("meta_whatsapp", {})
+    token = cfg.get("access_token", "")
+    token_preview = (token[:6] + "..." + token[-6:]) if len(token) > 12 else ("***" if token else "(not set)")
+    return JSONResponse({
+        "phone_number_id": cfg.get("phone_number_id", ""),
+        "app_id": cfg.get("app_id", ""),
+        "business_id": cfg.get("business_id", ""),
+        "api_version": cfg.get("api_version", "v23.0"),
+        "base_url": cfg.get("base_url", "https://graph.facebook.com"),
+        "token_preview": token_preview,
+        "webhook_verify_token": cfg.get("webhook_verify_token", ""),
+        "webhook_url": "https://donna.botsolutions.tech/whatsapp-incoming",
+    })
+
+
+@app.post("/api/settings/whatsapp")
+async def update_whatsapp_settings(request: Request, session=Depends(require_auth)):
+    """Update Meta WABA settings. Token field only updates if non-empty."""
+    role = session.get("role", "") if isinstance(session, dict) else ""
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    try:
+        body = await request.json()
+        cfg = CONFIG.get("meta_whatsapp", {})
+        for field in ["phone_number_id", "app_id", "business_id",
+                      "api_version", "base_url", "webhook_verify_token"]:
+            if body.get(field):
+                cfg[field] = body[field]
+        if body.get("access_token") and len(body["access_token"]) > 20:
+            cfg["access_token"] = body["access_token"]
+        CONFIG["meta_whatsapp"] = cfg
+        _persist_config_field("meta_whatsapp", cfg)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/whatsapp/test")
+async def test_whatsapp_connection(session=Depends(require_auth)):
+    """Test Meta WABA connection by fetching phone number info."""
+    try:
+        cfg = CONFIG.get("meta_whatsapp", {})
+        version = cfg.get("api_version", "v23.0")
+        phone_id = cfg.get("phone_number_id", "")
+        base = cfg.get("base_url", "https://graph.facebook.com")
+        token = cfg.get("access_token", "")
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{base}/{version}/{phone_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"fields": "display_phone_number,verified_name,quality_rating"},
+            )
+        if r.status_code == 200:
+            data = r.json()
+            return JSONResponse({
+                "ok": True,
+                "display_phone_number": data.get("display_phone_number", ""),
+                "verified_name": data.get("verified_name", ""),
+                "quality_rating": data.get("quality_rating", ""),
+            })
+        return JSONResponse({
+            "ok": False,
+            "error": f"API returned {r.status_code}: {r.text[:100]}",
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+
 # ── Siri Shortcut ─────────────────────────────────────────────────────────────
 
 import logging as _logging
