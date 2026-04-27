@@ -1220,8 +1220,10 @@ def get_last_ticket_messaged(number, hours=48):
     return row2['ticket_reference'] if row2 else None
 
 
-def update_delivery_status(sent_wa_message_name, status):
-    """Update delivery_status for an outbound team conversation."""
+def update_delivery_status(sent_wa_message_name: str, status: str):
+    """Update delivery status for a sent message by its wamid."""
+    if not sent_wa_message_name:
+        return
     with _conn() as conn:
         conn.execute(
             "UPDATE team_conversations SET delivery_status=? WHERE sent_wa_message_name=?",
