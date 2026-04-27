@@ -457,6 +457,10 @@ function MemberCard({member,active,onClick}){
     <div style={{flex:1,minWidth:0}}>
       <div style={{fontSize:13,fontWeight:500,color:active?'var(--teal)':'var(--text-1)'}}>{member.name}</div>
       <div style={{fontSize:11,color:'var(--text-3)',marginTop:1}}>{member.role}</div>
+      <div style={{display:'flex',alignItems:'center',gap:4,marginTop:3}}>
+        <div style={{width:6,height:6,borderRadius:'50%',flexShrink:0,background:member.window_active?'#22c55e':'#f59e0b'}}/>
+        <span style={{fontSize:9,color:member.window_active?'#22c55e':'#f59e0b'}}>{member.window_active?'live':'needs template'}</span>
+      </div>
     </div>
   </button>;
 }
@@ -552,12 +556,80 @@ function TeamSection({activeThread,setActiveThread,liveTeam,onClose}){
   </div>;
 }
 
+function ContactEditPanel({phone,onClose,onSave}){
+  const [form,setForm]=React.useState({name:'',company:'',contact_type:'customer',flagged:0,message_count:0});
+  const [saving,setSaving]=React.useState(false);
+  React.useEffect(()=>{
+    authFetch('/api/contacts/'+encodeURIComponent(phone)).then(d=>{
+      if(d&&!d.error) setForm({
+        name:d.contact_name||'',
+        company:d.company_name||'',
+        contact_type:d.contact_type||'customer',
+        flagged:d.flagged||0,
+        message_count:d.message_count||0,
+      });
+    }).catch(()=>{});
+  },[phone]);
+  const save=async()=>{
+    setSaving(true);
+    await authFetch('/api/contacts/'+encodeURIComponent(phone),{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(form),
+    }).catch(()=>{});
+    setSaving(false);
+    if(onSave) onSave(form);
+    onClose();
+  };
+  return <div style={{position:'absolute',top:52,left:0,right:0,zIndex:300,
+    background:'var(--bg1)',border:'1px solid var(--border-hi)',
+    borderRadius:10,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',padding:16,margin:'0 4px'}}>
+    <div style={{fontSize:12,fontWeight:600,color:'var(--text-1)',marginBottom:12}}>
+      Edit Contact · <span style={{color:'var(--text-3)',fontWeight:400}}>{form.message_count} messages</span>
+    </div>
+    {[['Name','name'],['Company','company']].map(([label,field])=>(
+      <div key={field} style={{marginBottom:10}}>
+        <div style={{fontSize:10,color:'var(--text-3)',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}}>{label}</div>
+        <input value={form[field]||''} onChange={e=>setForm(p=>({...p,[field]:e.target.value}))}
+          style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,
+            padding:'6px 8px',color:'var(--text-1)',fontSize:12,boxSizing:'border-box',outline:'none'}}/>
+      </div>
+    ))}
+    <div style={{marginBottom:10}}>
+      <div style={{fontSize:10,color:'var(--text-3)',textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:4}}>Type</div>
+      <select value={form.contact_type||'customer'} onChange={e=>setForm(p=>({...p,contact_type:e.target.value}))}
+        style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,
+          padding:'6px 8px',color:'var(--text-1)',fontSize:12,outline:'none'}}>
+        <option value="customer">Customer</option>
+        <option value="prospect">Prospect</option>
+        <option value="blocked">Blocked</option>
+        <option value="vendor">Vendor</option>
+        <option value="job_applicant">Job Applicant</option>
+      </select>
+    </div>
+    <label style={{display:'flex',alignItems:'center',gap:8,fontSize:12,color:'var(--text-2)',cursor:'pointer',marginBottom:12}}>
+      <input type="checkbox" checked={!!form.flagged} onChange={e=>setForm(p=>({...p,flagged:e.target.checked?1:0}))}/>
+      Flag this contact
+    </label>
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={onClose} style={{flex:1,padding:'7px 0',borderRadius:6,border:'1px solid var(--border)',
+        background:'var(--bg2)',color:'var(--text-2)',fontSize:12,cursor:'pointer'}}>Cancel</button>
+      <button onClick={save} style={{flex:1,padding:'7px 0',borderRadius:6,border:'none',
+        background:'var(--teal)',color:'#000',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+        {saving?'Saving...':'Save'}
+      </button>
+    </div>
+  </div>;
+}
+
 function WhatsAppSettingsPanel({onClose}){
   const [settings,setSettings]=React.useState(null);
   const [saving,setSaving]=React.useState(false);
   const [testing,setTesting]=React.useState(false);
   const [testResult,setTestResult]=React.useState(null);
   const [form,setForm]=React.useState({});
+  const [templateResp,setTemplateResp]=React.useState('');
+  const [loadingTpl,setLoadingTpl]=React.useState(false);
 
   React.useEffect(()=>{
     authFetch('/api/settings/whatsapp').then(d=>{
@@ -606,6 +678,21 @@ function WhatsAppSettingsPanel({onClose}){
           ?<div style={{fontSize:12,color:'#22c55e'}}>✅ Connected · {testResult.verified_name} · {testResult.display_phone_number} · Quality: {testResult.quality_rating}</div>
           :<div style={{fontSize:12,color:'#ef4444'}}>❌ {testResult.error}</div>}
       </div>}
+      <div style={{marginTop:16,borderTop:'1px solid var(--border)',paddingTop:14}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+          <div style={{fontSize:11,fontWeight:600,color:'var(--text-2)'}}>Approved Templates</div>
+          <button onClick={async()=>{
+            setLoadingTpl(true);setTemplateResp('');
+            const r=await authFetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({message:'list approved whatsapp templates',thread:'admin'})}).catch(e=>({response:e.message}));
+            setTemplateResp(r&&r.response?r.response:'No response');
+            setLoadingTpl(false);
+          }} style={{fontSize:10,color:'var(--teal)',background:'none',border:'none',cursor:'pointer',padding:'2px 6px',borderRadius:4,border:'1px solid rgba(14,196,180,0.3)'}}>
+            {loadingTpl?'Loading…':'Refresh'}
+          </button>
+        </div>
+        {templateResp&&<div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.7,whiteSpace:'pre-wrap',background:'var(--bg2)',borderRadius:6,padding:'8px 10px',maxHeight:200,overflowY:'auto'}}>{templateResp}</div>}
+      </div>
     </div>
 
     <div style={{padding:'14px 20px',borderTop:'1px solid var(--border)',display:'flex',gap:10,flexShrink:0}}>
@@ -815,6 +902,7 @@ function App(){
   const [unreadNotifs,setUnreadNotifs]=useState(0);
   const [showNotifPanel,setShowNotifPanel]=useState(false);
   const [showWASettings,setShowWASettings]=useState(false);
+  const [editingContact,setEditingContact]=useState(null);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
   const lastApiMsgCountRef=useRef({});
@@ -924,6 +1012,7 @@ function App(){
             status:m.window_active?'online':'away',
             avatar:(m.name||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase(),
             whatsapp:m.whatsapp||'',
+            window_active:m.window_active||0,
           }));
           setLiveTeam(members);
           const idMap={};
@@ -1191,14 +1280,22 @@ function App(){
                 <span style={{width:10,height:1.5,background:'currentColor',borderRadius:1,display:'block',alignSelf:'flex-start',marginLeft:2}}/>
               </button>
             )}
-            <div style={{minWidth:0,flex:1}}>
-              <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadLabel}</div>
+            <div style={{minWidth:0,flex:1,position:'relative'}}>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadLabel}</div>
+                {isCustomerThread&&<button onClick={()=>setEditingContact(editingContact===activeThread?null:activeThread)} style={{padding:'2px 7px',borderRadius:4,background:'var(--bg2)',border:'1px solid var(--border)',color:'var(--text-3)',fontSize:10,cursor:'pointer',flexShrink:0}}>{editingContact===activeThread?'✕':'Edit'}</button>}
+              </div>
               <div style={{fontSize:11,color:'var(--text-3)',marginTop:1,display:'flex',alignItems:'center',gap:6}}>
                 {activeCustomer&&<span style={{display:'inline-flex',alignItems:'center',gap:4,background:'#25d36620',color:'#25d366',borderRadius:4,padding:'1px 7px',fontSize:10,fontWeight:600}}>
                   <svg width="9" height="9" viewBox="0 0 14 14" fill="none"><path d="M7 1C3.7 1 1 3.7 1 7c0 1.1.3 2.1.9 3L1 13l3.2-.9C5.3 12.7 6.1 13 7 13c3.3 0 6-2.7 6-6S10.3 1 7 1Z" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>WhatsApp
                 </span>}
                 <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{threadSub}</span>
               </div>
+              {editingContact===activeThread&&isCustomerThread&&<ContactEditPanel
+                phone={activeCustomer?.phone||activeThread}
+                onClose={()=>setEditingContact(null)}
+                onSave={()=>setEditingContact(null)}
+              />}
             </div>
             <button onClick={()=>{setShowNotifPanel(o=>!o);if(unreadNotifs>0){authFetch('/api/notifications/read',{method:'POST'}).catch(()=>{});setUnreadNotifs(0);}}} style={{position:'relative',width:34,height:34,borderRadius:7,background:showNotifPanel?'var(--bg3)':'var(--bg2)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',color:'var(--text-2)',flexShrink:0}} title="Notifications">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none">

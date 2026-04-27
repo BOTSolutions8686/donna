@@ -645,6 +645,53 @@ async def take_escalation(escalation_id: int, body: TakeEscalationBody):
 
 
 
+
+
+# ── Contacts ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/contacts/{phone}")
+async def get_contact_detail(phone: str, session=Depends(require_auth)):
+    """Get full contact detail including conversation count."""
+    from urllib.parse import unquote
+    phone = unquote(phone)
+    with db._conn() as conn:
+        row = conn.execute("SELECT * FROM contacts WHERE phone_number=?", (phone,)).fetchone()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM customer_conversations WHERE customer_phone=?", (phone,)
+        ).fetchone()[0]
+    if not row:
+        raise HTTPException(status_code=404, detail="Not found")
+    contact = dict(row)
+    contact['message_count'] = count
+    return JSONResponse(contact)
+
+
+@app.put("/api/contacts/{phone}")
+async def update_contact(phone: str, request: Request, session=Depends(require_auth)):
+    """Update a contact name, company, type, and flag from the UI."""
+    from urllib.parse import unquote
+    phone = unquote(phone)
+    try:
+        body = await request.json()
+        name = body.get('name', '').strip()
+        company = body.get('company', '').strip()
+        contact_type = body.get('contact_type', 'customer')
+        flagged = int(body.get('flagged', 0))
+        flag_reason = body.get('flag_reason', '')
+        with db._conn() as conn:
+            conn.execute("""
+                UPDATE contacts SET
+                    contact_name=COALESCE(NULLIF(?,\'\'),contact_name),
+                    company_name=COALESCE(NULLIF(?,\'\'),company_name),
+                    contact_type=?,
+                    flagged=?,
+                    flag_reason=COALESCE(NULLIF(?,\'\'),flag_reason)
+                WHERE phone_number=?
+            """, (name, company, contact_type, flagged, flag_reason, phone))
+        return JSONResponse({'ok': True})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── EOD Reports ───────────────────────────────────────────────────────────────
 
 
