@@ -10,7 +10,7 @@ from typing import Optional
 
 import secrets
 import httpx
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import FastAPI, HTTPException, Depends, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
@@ -132,27 +132,9 @@ async def serve_manifest():
 
 @app.get("/sw.js")
 async def serve_sw():
-    sw = """const CACHE='donna-v2';
-const SHELL=['/'];
-self.addEventListener('install',e=>{
-  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));
-});
-self.addEventListener('activate',e=>{
-  e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
-});
-self.addEventListener('fetch',e=>{
-  const u=e.request.url;
-  if(u.includes('/api/')||u.includes('/auth')){
-    e.respondWith(fetch(e.request).catch(()=>new Response(JSON.stringify({error:'offline'}),{headers:{'Content-Type':'application/json'}})));
-    return;
-  }
-  e.respondWith(fetch(e.request).then(r=>{
-    if(r&&r.ok&&r.type==='basic'){const c=r.clone();caches.open(CACHE).then(ca=>ca.put(e.request,c));}
-    return r;
-  }).catch(()=>caches.match(e.request).then(r=>r||caches.match('/'))));
-});"""
+    sw = "const CACHE='donna-v3';\nconst SHELL=['/'];\n\nself.addEventListener('install',e=>{\n  e.waitUntil(\n    caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())\n  );\n});\n\nself.addEventListener('activate',e=>{\n  e.waitUntil(\n    caches.keys()\n      .then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k))))\n      .then(()=>self.clients.claim())\n  );\n});\n\nself.addEventListener('fetch',e=>{\n  const u=e.request.url;\n  if(u.includes('/api/')||u.includes('/auth')){\n    e.respondWith(\n      fetch(e.request).catch(()=>\n        new Response(JSON.stringify({error:'offline'}),\n          {headers:{'Content-Type':'application/json'}})\n      )\n    );\n    return;\n  }\n  e.respondWith(\n    fetch(e.request).then(r=>{\n      if(r&&r.ok&&r.type==='basic'){\n        const c=r.clone();\n        caches.open(CACHE).then(ca=>ca.put(e.request,c));\n      }\n      return r;\n    }).catch(()=>\n      caches.match(e.request).then(r=>r||caches.match('/'))\n    )\n  );\n});\n\nself.addEventListener('push',e=>{\n  if(!e.data) return;\n  let data;\n  try{ data=e.data.json(); }\n  catch{ data={title:'Donna',body:e.data.text(),url:'/'}; }\n  const title=data.title||'Donna — Operations AI';\n  const options={\n    body:data.body||'',\n    icon:data.icon||'/icon.svg',\n    badge:'/icon.svg',\n    tag:data.tag||'donna',\n    data:{url:data.url||'/'},\n    requireInteraction:false,\n    silent:false,\n    vibrate:[100,50,100],\n    timestamp:data.timestamp||Date.now(),\n    actions:[\n      {action:'open',title:'Open Donna'},\n      {action:'dismiss',title:'Dismiss'},\n    ]\n  };\n  e.waitUntil(self.registration.showNotification(title,options));\n});\n\nself.addEventListener('notificationclick',e=>{\n  e.notification.close();\n  if(e.action==='dismiss') return;\n  const url=e.notification.data?.url||'/';\n  e.waitUntil(\n    clients.matchAll({type:'window',includeUncontrolled:true}).then(cls=>{\n      for(const c of cls){\n        if(c.url.includes('donna.botsolutions.tech')&&'focus' in c){\n          return c.focus().then(wc=>wc.navigate(url));\n        }\n      }\n      if(clients.openWindow) return clients.openWindow('https://donna.botsolutions.tech'+url);\n    })\n  );\n});\n"
     return Response(sw, media_type="application/javascript", headers={
-        "Cache-Control": "no-cache, no-store",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
     })
 
 
@@ -664,6 +646,59 @@ async def take_escalation(escalation_id: int, body: TakeEscalationBody):
 
 
 # ── EOD Reports ───────────────────────────────────────────────────────────────
+
+
+
+# ── Web Push ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/push/vapid-public-key")
+async def get_vapid_public_key():
+    """Return VAPID public key for client-side subscription setup."""
+    push_cfg = CONFIG.get("push_notifications", {})
+    pub_key = push_cfg.get("vapid_public_key", "")
+    if not pub_key:
+        raise HTTPException(status_code=503, detail="Push not configured")
+    return JSONResponse({"publicKey": pub_key})
+
+
+@app.post("/api/push/subscribe")
+async def subscribe_push(request: Request, session=Depends(require_auth)):
+    """Save a push subscription from the PWA."""
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        body = await request.json()
+        subscription = body.get("subscription", {})
+        endpoint = subscription.get("endpoint", "")
+        keys = subscription.get("keys", {})
+        p256dh = keys.get("p256dh", "")
+        auth = keys.get("auth", "")
+        if not endpoint or not p256dh or not auth:
+            raise HTTPException(status_code=400, detail="Invalid subscription")
+        user_name = session.get("username", "unknown") if isinstance(session, dict) else "unknown"
+        db.save_push_subscription(endpoint, p256dh, auth, user_name)
+        _log.info("Push subscription saved for %s", user_name)
+        return JSONResponse({"ok": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/push/unsubscribe")
+async def unsubscribe_push(request: Request, session=Depends(require_auth)):
+    """Remove a push subscription."""
+    try:
+        body = await request.json()
+        endpoint = body.get("endpoint", "")
+        if endpoint:
+            db.delete_push_subscription(endpoint)
+        return JSONResponse({"ok": True})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/reports/daily")
 async def get_daily_reports_api(date: str = None, session=Depends(require_auth)):

@@ -195,6 +195,17 @@ def init_db():
                 updated_at TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                user_name TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_used TEXT,
+                active INTEGER DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS pending_context (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_member_number TEXT NOT NULL,
@@ -1679,3 +1690,34 @@ def is_customer_message_recently_processed(phone, message_content, within_minute
             (phone, message_content, '-{}'.format(within_minutes))
         ).fetchone()
     return row is not None
+
+# ── Web Push subscription helpers ─────────────────────────────────────────────
+
+def save_push_subscription(endpoint: str, p256dh: str, auth: str, user_name: str = None):
+    """Upsert a push subscription endpoint."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_name, last_used)
+               VALUES (?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(endpoint) DO UPDATE SET
+                   p256dh=excluded.p256dh,
+                   auth=excluded.auth,
+                   active=1,
+                   last_used=datetime('now')""",
+            (endpoint, p256dh, auth, user_name),
+        )
+
+
+def delete_push_subscription(endpoint: str):
+    """Remove a push subscription (unsubscribe or 410 Gone)."""
+    with _conn() as conn:
+        conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+
+
+def get_all_push_subscriptions() -> list:
+    """Return all active push subscriptions."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT endpoint, p256dh, auth, user_name FROM push_subscriptions WHERE active=1"
+        ).fetchall()
+    return [dict(r) for r in rows]

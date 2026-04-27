@@ -61,6 +61,61 @@ wa_log.propagate = False  # don't double-log to root
 
 log = logging.getLogger(__name__)
 
+# ── Web Push ──────────────────────────────────────────────────────────────────
+
+async def send_push_notification(title: str, body: str, url: str = '/', tag: str = 'donna', icon: str = '/icon.svg'):
+    """Send a Web Push notification to all active subscribers."""
+    push_cfg = CONFIG.get('push_notifications', {})
+    private_key = push_cfg.get('vapid_private_key', '')
+    if not private_key:
+        return
+    subs = db.get_all_push_subscriptions()
+    if not subs:
+        return
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        log.warning('pywebpush not installed — skipping push notification')
+        return
+    import json as _json
+    import time as _time
+    payload = _json.dumps({
+        'title': title,
+        'body': body,
+        'icon': icon,
+        'badge': '/icon.svg',
+        'url': url,
+        'tag': tag,
+        'timestamp': int(_time.time() * 1000),
+    })
+    vapid_claims = push_cfg.get('vapid_claims', {'sub': 'mailto:talha@botsolutions.tech'})
+    dead_endpoints = []
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={
+                    'endpoint': sub['endpoint'],
+                    'keys': {'p256dh': sub['p256dh'], 'auth': sub['auth']},
+                },
+                data=payload,
+                vapid_private_key=private_key,
+                vapid_claims=dict(vapid_claims),
+            )
+        except WebPushException as e:
+            status = getattr(e.response, 'status_code', None) if e.response else None
+            if status in (404, 410):
+                dead_endpoints.append(sub['endpoint'])
+                log.info('Push: removed dead subscription (HTTP %s)', status)
+            else:
+                log.warning('Push send failed for %s: %s', sub.get('user_name'), e)
+        except Exception as e:
+            log.warning('Push send error: %s', e)
+    for ep in dead_endpoints:
+        db.delete_push_subscription(ep)
+    if subs:
+        log.info('Push notification sent: %s — %s (%d subs, %d dead)', title, body, len(subs), len(dead_endpoints))
+
+
 # ── Claude ───────────────────────────────────────────────────────────────────
 ai = anthropic.Anthropic(api_key=CONFIG["anthropic"]["api_key"])
 MODEL = CONFIG["anthropic"]["model"]
@@ -3304,6 +3359,14 @@ async def job_eod_summary(app):
         try:
             erp.send_whatsapp(admin_wa, digest[:1500])
             log.info('EOD digest sent to admin — %d reports', len(reports))
+            asyncio.get_event_loop().create_task(
+                send_push_notification(
+                    title='📋 EOD Summary Ready',
+                    body=f'{len(reports)} report(s) submitted today',
+                    url='/',
+                    tag='eod-summary',
+                )
+            )
         except Exception as e:
             log.error('EOD digest send failed: %s', e)
     else:
@@ -3852,6 +3915,16 @@ async def trigger_escalation(phone_number: str, customer_name: str, reason: str,
             await _telegram_bot.send_message(chat_id=_telegram_talha_chat_id, text=alert_text)
         except Exception as e:
             log.warning('Escalation Telegram notify failed: %s', e)
+
+    # Notify via Web Push
+    asyncio.get_event_loop().create_task(
+        send_push_notification(
+            title='🚩 Customer Escalation',
+            body=f'{customer_name}: {reason}',
+            url='/',
+            tag='escalation',
+        )
+    )
 
     # Notify assigned team member via WhatsApp if different from admin
     if assigned_to and assigned_to != _ADMIN_NUMBER:
@@ -4816,6 +4889,15 @@ async def job_zatca_check(app):
                     msg += "\n❌ Ticket creation failed"
 
             await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+            if is_rejection:
+                asyncio.get_event_loop().create_task(
+                    send_push_notification(
+                        title='⚠️ ZATCA Rejection',
+                        body=f'{invoice}: {status}',
+                        url='/',
+                        tag='zatca',
+                    )
+                )
             db.record_zatca_alert(
                 issue["name"], invoice, status, zatca_st, http_code,
                 ticket_created=bool(ticket_name), ticket_name=ticket_name,
@@ -4904,6 +4986,14 @@ async def job_daily_summary(app):
         summary = response.content[0].text if response.content else context
 
         await _send(app.bot, summary, chat_id=CONFIG["telegram"]["allowed_user_id"])
+        asyncio.get_event_loop().create_task(
+            send_push_notification(
+                title='☀️ Morning Briefing',
+                body='Your daily Donna briefing is ready',
+                url='/',
+                tag='daily-briefing',
+            )
+        )
 
         # Save today's snapshot for tomorrow's comparison + update collections tracker
         db.save_daily_snapshot(date.today().isoformat(), overdue, proformas)

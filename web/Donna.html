@@ -733,9 +733,62 @@ function App(){
     };
   },[]);
   const [toolsOpen,setToolsOpen]=useState(false);
+  // Web Push
+  const [pushSupported,setPushSupported]=useState(false);
+  const [pushEnabled,setPushEnabled]=useState(false);
+  const [pushLoading,setPushLoading]=useState(false);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
   const lastApiMsgCountRef=useRef({});
+
+  // Web Push init
+  useEffect(()=>{
+    const supported='serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    setPushSupported(supported);
+    if(!supported) return;
+    // Restore enabled state from localStorage
+    const saved=localStorage.getItem('donna-push');
+    if(saved==='on') setPushEnabled(true);
+  },[]);
+
+  async function enablePush(){
+    if(pushLoading) return;
+    setPushLoading(true);
+    try{
+      const perm=await Notification.requestPermission();
+      if(perm!=='granted'){alert('Please allow notifications to enable push alerts.');setPushLoading(false);return;}
+      const {publicKey}=await authFetch('/api/push/vapid-public-key');
+      // Convert URL-safe base64 to Uint8Array
+      const raw=atob(publicKey.replace(/-/g,'+').replace(/_/g,'/'));
+      const key=new Uint8Array(raw.length);
+      for(let i=0;i<raw.length;i++) key[i]=raw.charCodeAt(i);
+      const reg=await navigator.serviceWorker.ready;
+      const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+      await authFetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON()})});
+      localStorage.setItem('donna-push','on');
+      setPushEnabled(true);
+    }catch(e){
+      console.error('Push enable failed:',e);
+      alert('Could not enable push notifications: '+e.message);
+    }finally{setPushLoading(false);}
+  }
+
+  async function disablePush(){
+    if(pushLoading) return;
+    setPushLoading(true);
+    try{
+      const reg=await navigator.serviceWorker.ready;
+      const sub=await reg.pushManager.getSubscription();
+      if(sub){
+        await authFetch('/api/push/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:sub.endpoint})});
+        await sub.unsubscribe();
+      }
+      localStorage.removeItem('donna-push');
+      setPushEnabled(false);
+    }catch(e){
+      console.error('Push disable failed:',e);
+    }finally{setPushLoading(false);}
+  }
 
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme',isDark?'dark':'light');
@@ -1121,10 +1174,16 @@ function App(){
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/><rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8"/></svg>
         Tools
       </button>
-      <button className={`mob-nav-btn`} onClick={()=>{const _s=localStorage.getItem('donna-user');if(_s){const _t=JSON.parse(_s).token;if(_t)fetch(API+'/api/auth/logout-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_t})}).catch(()=>{});}localStorage.removeItem('donna-user');window.location.reload();}}>
+      {pushSupported&&<button className={`mob-nav-btn ${pushEnabled?'active':''}`} onClick={()=>pushEnabled?disablePush():enablePush()} disabled={pushLoading} title={pushEnabled?'Disable push notifications':'Enable push notifications'}>
+        {pushEnabled
+          ?<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 1 7 7v4l1.4 2.1A1 1 0 0 1 19.5 17H4.5a1 1 0 0 1-.9-1.4L5 13V9a7 7 0 0 1 7-7zm0 20a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2z"/></svg>
+          :<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2a7 7 0 0 1 7 7v4l1.4 2.1A1 1 0 0 1 19.5 17H4.5a1 1 0 0 1-.9-1.4L5 13V9a7 7 0 0 1 7-7zm0 20a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2z" stroke="currentColor" strokeWidth="1.6"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>}
+        {pushLoading?'…':pushEnabled?'Alerts On':'Alerts'}
+      </button>}
+      {!pushSupported&&<button className={`mob-nav-btn`} onClick={()=>{const _s=localStorage.getItem('donna-user');if(_s){const _t=JSON.parse(_s).token;if(_t)fetch(API+'/api/auth/logout-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:_t})}).catch(()=>{});}localStorage.removeItem('donna-user');window.location.reload();}}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
         {loggedIn.initials}
-      </button>
+      </button>}
     </div>
   </div>;
 }
