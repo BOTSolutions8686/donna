@@ -701,6 +701,75 @@ async def unsubscribe_push(request: Request, session=Depends(require_auth)):
 
 
 
+# ── Siri Shortcut ─────────────────────────────────────────────────────────────
+
+import logging as _logging
+import re as _re
+
+_shortcut_log = _logging.getLogger("donna.shortcut")
+
+
+def _verify_shortcut_key(request: Request) -> bool:
+    key = request.headers.get("X-Shortcut-Key", "")
+    expected = CONFIG.get("shortcuts", {}).get("api_key", "")
+    return bool(expected) and key == expected
+
+
+@app.post("/api/shortcut/ask")
+async def shortcut_ask(request: Request):
+    """
+    Siri Shortcut endpoint. Accepts JSON {"question": "..."}.
+    Returns plain text so Siri can speak it directly.
+    Authenticated via X-Shortcut-Key header — no session cookie needed.
+    """
+    if not _verify_shortcut_key(request):
+        return Response("Authentication failed.", media_type="text/plain", status_code=403)
+
+    if _ask_claude_fn is None:
+        return Response("Donna is starting up. Try again in a moment.", media_type="text/plain")
+
+    try:
+        body = await request.json()
+        question = (body.get("question") or "").strip()
+        if not question:
+            return Response(
+                "I didn't catch a question. Please try again.",
+                media_type="text/plain",
+            )
+
+        _shortcut_log.info("Shortcut query: %s", question[:120])
+
+        # Reuse the same full-tools admin pipeline as Telegram/web
+        response_text = await _ask_claude_fn(
+            question,
+            channel="shortcut",
+            sender_name="Talha",
+        )
+
+        # Strip markdown for clean voice playback
+        clean = _re.sub(r'\*\*([^*]+)\*\*', r'\1', response_text)
+        clean = _re.sub(r'\*([^*]+)\*', r'\1', clean)
+        clean = _re.sub(r'`([^`]+)`', r'\1', clean)
+        clean = _re.sub(r'#{1,6}\s+', '', clean)
+        clean = clean.replace('—', ',').replace('|', ',')
+        clean = _re.sub(r'  +', ' ', clean)
+
+        # Trim to ~120 words — comfortable Siri voice length
+        words = clean.split()
+        if len(words) > 120:
+            clean = ' '.join(words[:120]) + '. For more details, check the Donna dashboard.'
+
+        return Response(clean.strip(), media_type="text/plain")
+
+    except Exception as e:
+        _shortcut_log.error("shortcut_ask error: %s", e, exc_info=True)
+        return Response(
+            "Sorry, I ran into an error. Please check the Donna dashboard.",
+            media_type="text/plain",
+        )
+
+
+
 # ── Admin conversation (cross-device chat history) ────────────────────────────
 
 @app.get("/api/admin/conversation")

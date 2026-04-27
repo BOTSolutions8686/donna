@@ -61,6 +61,21 @@ wa_log.propagate = False  # don't double-log to root
 
 log = logging.getLogger(__name__)
 
+# ── Siri Shortcut / external query entry point ────────────────────────────────
+
+async def process_admin_query(question: str) -> str:
+    """
+    Process a question from Talha via any non-Telegram channel (Siri, shortcuts).
+    Wraps ask_claude with the full TOOLS pipeline so shortcuts get identical
+    intelligence to the Telegram admin interface.
+    """
+    try:
+        return await ask_claude(question, channel="shortcut", sender_name="Talha")
+    except Exception as e:
+        log.error("process_admin_query error: %s", e)
+        return f"Error processing your question: {str(e)[:80]}"
+
+
 # ── Web Push ──────────────────────────────────────────────────────────────────
 
 async def send_push_notification(title: str, body: str, url: str = '/', tag: str = 'donna', icon: str = '/icon.svg'):
