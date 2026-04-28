@@ -1052,7 +1052,7 @@ def get_team_conversation_history(number, limit=10):
     """Get last N messages with a team member from team_conversations."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT direction, message_content, timestamp, ticket_reference FROM team_conversations WHERE whatsapp_number=? ORDER BY timestamp DESC LIMIT ?",
+            "SELECT direction, message_content, strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp, ticket_reference FROM team_conversations WHERE whatsapp_number=? ORDER BY timestamp DESC LIMIT ?",
             (number, limit)
         ).fetchall()
     return [dict(r) for r in reversed(rows)]
@@ -1267,7 +1267,7 @@ def get_conversation_thread(number, ticket_id=None, limit=20):
     with _conn() as conn:
         if ticket_id:
             rows = conn.execute(
-                "SELECT direction, team_member_name, message_content, timestamp, ticket_reference, conversation_thread_id "
+                "SELECT direction, team_member_name, message_content, strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp, ticket_reference, conversation_thread_id "
                 "FROM team_conversations "
                 "WHERE whatsapp_number=? AND (ticket_reference=? OR conversation_thread_id IN ("
                 "  SELECT conversation_thread_id FROM team_conversations "
@@ -1412,7 +1412,9 @@ def get_customer_conversation_history(phone_number, limit=50):
     """Return last N messages for a customer, oldest first."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT direction, message_content, timestamp, ticket_reference, handled_by, language "
+            "SELECT direction, message_content, "
+            "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp, "
+            "ticket_reference, handled_by, language "
             "FROM customer_conversations WHERE phone_number=? "
             "ORDER BY timestamp ASC LIMIT ?",
             (phone_number, limit)
@@ -1828,7 +1830,7 @@ def is_customer_message_recently_processed(phone, message_content, within_minute
     with _conn() as conn:
         row = conn.execute(
             "SELECT id FROM customer_conversations "
-            "WHERE customer_phone=? AND message_content=? AND direction='inbound' "
+            "WHERE phone_number=? AND message_content=? AND direction='inbound' "
             "AND timestamp >= datetime('now', ? || ' minutes') LIMIT 1",
             (phone, message_content, '-{}'.format(within_minutes))
         ).fetchone()
@@ -1880,7 +1882,7 @@ def get_admin_conversation(username: str, limit: int = 50) -> list:
     """Get recent admin chat messages."""
     with _conn() as conn:
         rows = conn.execute("""
-            SELECT direction, message_content, timestamp
+            SELECT direction, message_content, strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp
             FROM admin_conversations
             WHERE username=? AND thread='admin'
             ORDER BY timestamp DESC LIMIT ?
@@ -1902,7 +1904,9 @@ def add_notification(title: str, body: str, category: str = 'info'):
 def get_notifications(limit: int = 20, unread_only: bool = False) -> list:
     """Return recent notifications."""
     with _conn() as conn:
-        q = "SELECT * FROM donna_notifications"
+        q = ("SELECT id, title, body, category, read, "
+             "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp "
+             "FROM donna_notifications")
         if unread_only:
             q += " WHERE read=0"
         q += " ORDER BY timestamp DESC LIMIT ?"

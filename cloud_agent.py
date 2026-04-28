@@ -3982,7 +3982,7 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
     # Contact-type context injection
     _ct = (contact or {}).get('contact_type', 'customer')
     _msg_count = (contact or {}).get('message_count', 0) or 0
-    _name_known = bool((contact or {}).get('name', '').strip())
+    _name_known = bool(((contact or {}).get('name') or '').strip())
     if _ct == 'prospect':
         system_prompt += (
             '\n\nCONTACT CONTEXT: This person is a PROSPECT (not yet a customer). '
