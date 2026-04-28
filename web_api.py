@@ -279,9 +279,6 @@ async def auth_me(session=Depends(require_auth)):
 # separate aiohttp server to be publicly reachable.
 
 
-# ERPNext WhatsApp webhook — Donna fans out to this after processing
-_ERPNEXT_WH_URL = CONFIG.get("erpnext_webhook_url", "https://helpdesk.botsolutions.tech/api/method/frappe_whatsapp.utils.webhook.webhook")
-
 _wa_webhook_handler = None
 
 
@@ -308,58 +305,38 @@ async def wa_verify(request: Request):
 
 @app.post("/whatsapp-incoming")
 async def wa_inbound(request: Request):
-    """Receive inbound WhatsApp events from Meta Cloud API.
+    """Receive inbound WhatsApp events from Meta Cloud API (Donna dedicated app).
 
-    Flow:
-      1. Verify HMAC (Meta) or shared secret (legacy ERPNext relay)
-      2. Respond 200 immediately (Meta requires fast ACK)
-      3. Dispatch to Donna's handlers
-      4. Forward raw payload to ERPNext webhook (fan-out, background)
+    Donna has its own Meta app — no fan-out to ERPNext needed.
+    Flow: verify → ACK 200 immediately → dispatch to handlers in background.
     """
     import hmac as _hmac2, hashlib as _hashlib2, json as _wjson2, asyncio as _aio
     body_bytes = await request.body()
     sig = request.headers.get("X-Hub-Signature-256", "")
-    is_meta_event = bool(sig)
 
     if sig:
         app_secret = CONFIG.get("meta_whatsapp", {}).get("app_secret", "")
         if app_secret:
             expected = "sha256=" + _hmac2.new(app_secret.encode(), body_bytes, _hashlib2.sha256).hexdigest()
             if not _hmac2.compare_digest(sig, expected):
-                _log.warning("Meta webhook HMAC mismatch (port 8080)")
+                _log.warning("Meta webhook HMAC mismatch")
                 raise HTTPException(status_code=403, detail="Forbidden")
     else:
-        # Legacy ERPNext relay — keep working during transition
+        # Legacy X-Donna-Secret relay (kept for backwards compat during transition)
         secret = request.headers.get("X-Donna-Secret", "")
         expected_s = CONFIG.get("whatsapp_webhook", {}).get("secret", "")
         if expected_s and secret != expected_s:
             raise HTTPException(status_code=403, detail="Forbidden")
-        is_meta_event = False  # don't re-forward legacy relay events
 
     try:
         data = _wjson2.loads(body_bytes)
     except Exception:
         raise HTTPException(status_code=400, detail="Bad JSON")
 
-    # Dispatch to Donna's handlers (background — don't block the 200 response)
     if _wa_webhook_handler:
         _aio.get_event_loop().create_task(_wa_webhook_handler(data))
     else:
-        _log.warning("wa_inbound: Donna handler not registered yet")
-
-    # Fan-out to ERPNext (only for real Meta events, not legacy relay re-forwards)
-    if is_meta_event and _ERPNEXT_WH_URL:
-        async def _forward_to_erpnext():
-            try:
-                headers = {"Content-Type": "application/json"}
-                if sig:
-                    headers["X-Hub-Signature-256"] = sig  # pass original signature through
-                async with httpx.AsyncClient(timeout=10, verify=False) as _hc:
-                    resp = await _hc.post(_ERPNEXT_WH_URL, content=body_bytes, headers=headers)
-                _log.info("Forwarded to ERPNext webhook: %d", resp.status_code)
-            except Exception as _fe:
-                _log.warning("ERPNext webhook forward failed: %s", _fe)
-        _aio.get_event_loop().create_task(_forward_to_erpnext())
+        _log.warning("wa_inbound: handler not registered yet")
 
     return Response(status_code=200)
 
