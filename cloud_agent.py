@@ -3383,22 +3383,38 @@ async def job_eod_summary(app):
 
     digest = "\n".join(digest_parts)
 
-    # Send to Talha via WhatsApp
+    # Send to admin and all manager-role users with WhatsApp numbers
+    recipients = set()
     admin_wa = CONFIG.get('communication', {}).get('admin_whatsapp', '')
     if admin_wa:
-        try:
-            erp.send_whatsapp(admin_wa, digest[:1500])
-            log.info('EOD digest sent to admin — %d reports', len(reports))
-            asyncio.get_event_loop().create_task(
-                send_push_notification(
-                    title='📋 EOD Summary Ready',
-                    body=f'{len(reports)} report(s) submitted today',
-                    url='/?tab=reports',
-                    tag='eod-summary',
-                )
+        recipients.add(admin_wa)
+
+    # Also send to all managers in donna_users who have matching team_member entry
+    try:
+        manager_users = [u for u in db.list_donna_users() if u.get('role') in ('manager',) and u.get('is_active')]
+        team_members = CONFIG.get('team_members', [])
+        for mu in manager_users:
+            for tm in team_members:
+                if tm.get('email', '').lower() == mu.get('username', '').lower() and tm.get('whatsapp'):
+                    recipients.add(tm['whatsapp'])
+    except Exception as _me:
+        log.warning('EOD summary: error finding manager recipients: %s', _me)
+
+    if recipients:
+        for wa_num in recipients:
+            try:
+                erp.send_whatsapp(wa_num, digest[:1500])
+                log.info('EOD digest sent to %s — %d reports', wa_num, len(reports))
+            except Exception as e:
+                log.error('EOD digest send failed to %s: %s', wa_num, e)
+        asyncio.get_event_loop().create_task(
+            send_push_notification(
+                title='📋 EOD Summary Ready',
+                body=f'{len(reports)} report(s) submitted today',
+                url='/?tab=reports',
+                tag='eod-summary',
             )
-        except Exception as e:
-            log.error('EOD digest send failed: %s', e)
+        )
     else:
         log.warning('EOD summary: no admin_whatsapp configured')
 
@@ -3608,6 +3624,16 @@ def _send_customer_reply(phone_number: str, customer_name: str, reply: str,
 async def handle_customer_message(sender_number: str, content: str, wa_name: str = None):
     """Full customer WhatsApp inbound message handler."""
     import re as _re_cust
+    # If a human agent has claimed this conversation, Donna doesn't AI-respond
+    _claim = db.get_conversation_claim(sender_number)
+    if _claim:
+        # Still log the message so the human can see it
+        contact = db.get_contact(sender_number)
+        customer_name = (contact or {}).get('name') or sender_number
+        lang = (contact or {}).get('language', 'en')
+        db.log_customer_conversation(sender_number, 'inbound', content, wa_message_name=wa_name, language=lang)
+        log.info("Customer msg from %s — conversation claimed by %s, no AI response", sender_number, _claim.get('claimed_by'))
+        return
     import anthropic as _ant
 
     log.info('Customer message from %s: %s', sender_number, content[:80])
@@ -4169,6 +4195,29 @@ async def job_escalation_check(app):
 
         except Exception as e:
             log.error('Failed to create auto-ticket for escalation #%d: %s', esc_id, e)
+
+
+# ── Business hours ───────────────────────────────────────────────────────────
+def _is_business_hours() -> bool:
+    """Return True if current KSA time is within business hours (Sun-Thu 10am-5pm)."""
+    from datetime import datetime, timezone, timedelta
+    ksa = datetime.now(timezone(timedelta(hours=3)))
+    # weekday(): Mon=0 ... Fri=4, Sat=5, Sun=6
+    # Saudi business week: Sun(6)-Thu(3); Fri(4) and Sat(5) off
+    if ksa.weekday() in (4, 5):  # Friday, Saturday off
+        return False
+    return 10 <= ksa.hour < 17
+
+
+def _business_hours_message(lang: str = 'en') -> str:
+    """Return an out-of-hours message in the customer's language."""
+    if lang == 'ar':
+        return ("شكراً للتواصل! مواعيد عملنا من الأحد إلى الخميس، "
+                "10 صباحاً - 5 مساءً بتوقيت السعودية. "
+                "سيتواصل معكم فريقنا في أقرب وقت ممكن.")
+    return ("Thanks for reaching out! Our team is available "
+            "Sunday–Thursday, 10 AM–5 PM Saudi time. "
+            "We'll get back to you during business hours.")
 
 
 CHAT_START_TEMPLATE = "chat_start-en"
@@ -6016,6 +6065,22 @@ def main():
             log.info("FastAPI WhatsApp webhook handler registered on port 8080")
         except Exception as _rwe:
             log.warning("Could not register FastAPI WA handler: %s", _rwe)
+
+        # Register outbound WhatsApp sender so web UI can send messages
+        async def _web_ui_send_whatsapp(phone: str, message: str = None,
+                                         template_name: str = None, template_params: list = None):
+            """Wrapper for web API → WhatsApp send."""
+            import asyncio as _aio3
+            if template_name:
+                import erpnext_client as _erp3
+                _erp3.send_whatsapp_template(phone, template_name, params=template_params or [])
+            elif message:
+                _send_customer_reply(phone, phone, message)
+        try:
+            web_api.register_send_whatsapp(_web_ui_send_whatsapp)
+            log.info("Web UI WhatsApp sender registered")
+        except Exception as _rse:
+            log.warning("Could not register WA sender: %s", _rse)
 
         # Also start the aiohttp server on 8765 (kept as local fallback)
         await _webhook_runner.setup()

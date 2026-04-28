@@ -1913,3 +1913,189 @@ def delete_notification(notif_id: int):
 def clear_all_notifications():
     with _conn() as conn:
         conn.execute("DELETE FROM donna_notifications")
+
+
+# ── Role permissions ──────────────────────────────────────────────────────────
+
+def get_role_permissions(role: str) -> dict:
+    """Return {permission: granted} dict for a role."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT permission, granted FROM role_permissions WHERE role=?", (role,)
+        ).fetchall()
+    return {r["permission"]: bool(r["granted"]) for r in rows}
+
+
+def get_all_role_permissions() -> dict:
+    """Return {role: {permission: granted}} for all roles."""
+    with _conn() as conn:
+        rows = conn.execute("SELECT role, permission, granted FROM role_permissions").fetchall()
+    result = {}
+    for r in rows:
+        result.setdefault(r["role"], {})[r["permission"]] = bool(r["granted"])
+    return result
+
+
+def set_role_permission(role: str, permission: str, granted: bool):
+    """Set a single permission flag for a role."""
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO role_permissions (role, permission, granted)
+            VALUES (?, ?, ?)
+            ON CONFLICT(role, permission) DO UPDATE SET granted=excluded.granted
+        """, (role, permission, 1 if granted else 0))
+
+
+def has_permission(username: str, permission: str) -> bool:
+    """Check if a user (by username) has a specific permission via their role."""
+    user = get_donna_user(username)
+    if not user:
+        return False
+    role = user.get("role", "support")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT granted FROM role_permissions WHERE role=? AND permission=?",
+            (role, permission)
+        ).fetchone()
+    return bool(row["granted"]) if row else False
+
+
+# ── User integrations ─────────────────────────────────────────────────────────
+
+def save_user_integration(username: str, integration: str, token_json: str,
+                           email_address: str = None, scopes: str = None):
+    """Upsert an OAuth integration for a user."""
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO user_integrations (username, integration, token_json, email_address, scopes, connected_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(username, integration) DO UPDATE SET
+                token_json=excluded.token_json,
+                email_address=excluded.email_address,
+                scopes=excluded.scopes,
+                connected_at=excluded.connected_at
+        """, (username, integration, token_json, email_address, scopes))
+
+
+def get_user_integration(username: str, integration: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_integrations WHERE username=? AND integration=?",
+            (username, integration)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_user_integrations(username: str) -> list:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT integration, email_address, connected_at FROM user_integrations WHERE username=?",
+            (username,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_user_integration(username: str, integration: str):
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM user_integrations WHERE username=? AND integration=?",
+            (username, integration)
+        )
+
+
+# ── Conversation claims ───────────────────────────────────────────────────────
+
+def claim_conversation(phone_number: str, username: str, display_name: str) -> bool:
+    """Claim a conversation. Returns True if successful, False if already claimed by someone else."""
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT claimed_by, active FROM conversation_claims WHERE phone_number=?",
+            (phone_number,)
+        ).fetchone()
+        if existing and existing["active"] and existing["claimed_by"] != username:
+            return False
+        conn.execute("""
+            INSERT INTO conversation_claims (phone_number, claimed_by, claimed_by_name, claimed_at, active)
+            VALUES (?, ?, ?, datetime('now'), 1)
+            ON CONFLICT(phone_number) DO UPDATE SET
+                claimed_by=excluded.claimed_by,
+                claimed_by_name=excluded.claimed_by_name,
+                claimed_at=excluded.claimed_at,
+                released_at=NULL,
+                active=1
+        """, (phone_number, username, display_name))
+        # Pause Donna's AI responses for claimed conversations
+        conn.execute(
+            "UPDATE contacts SET donna_paused=1 WHERE phone_number=?", (phone_number,)
+        )
+    return True
+
+
+def release_conversation(phone_number: str, username: str) -> bool:
+    """Release a conversation claim. Only the claimer (or admin) can release."""
+    with _conn() as conn:
+        conn.execute("""
+            UPDATE conversation_claims
+            SET released_at=datetime('now'), active=0
+            WHERE phone_number=? AND claimed_by=?
+        """, (phone_number, username))
+        conn.execute(
+            "UPDATE contacts SET donna_paused=0 WHERE phone_number=?", (phone_number,)
+        )
+    return True
+
+
+def get_conversation_claim(phone_number: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM conversation_claims WHERE phone_number=? AND active=1",
+            (phone_number,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_all_claims() -> list:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversation_claims WHERE active=1 ORDER BY claimed_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Contact enrichment ────────────────────────────────────────────────────────
+
+def update_contact_enrichment(phone_number: str, **kwargs):
+    """Update enrichment fields on a contact: name, email, company, need_category."""
+    allowed = {"name", "email", "company", "need_category", "enriched_name", "status"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v}
+    if not updates:
+        return
+    updates["enriched_at"] = "datetime('now')"
+    set_parts = []
+    vals = []
+    for k, v in updates.items():
+        if k == "enriched_at":
+            set_parts.append(f"{k}=datetime('now')")
+        else:
+            set_parts.append(f"{k}=?")
+            vals.append(v)
+    vals.append(phone_number)
+    with _conn() as conn:
+        conn.execute(
+            f"UPDATE contacts SET {', '.join(set_parts)} WHERE phone_number=?", vals
+        )
+
+
+def create_donna_user_manual(username: str, display_name: str, role: str = 'support') -> bool:
+    """Pre-create a user (before first login). Returns False if already exists."""
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM donna_users WHERE username=?", (username,)
+        ).fetchone()
+        if existing:
+            return False
+        conn.execute(
+            "INSERT INTO donna_users (username, display_name, role, is_active) VALUES (?,?,?,1)",
+            (username, display_name, role)
+        )
+    return True

@@ -122,6 +122,20 @@ async def require_admin(session=Depends(_verify_token)):
     return session
 
 
+async def require_manager(session=Depends(_verify_token)):
+    """Allow admin or manager."""
+    if session.get("role") not in {"admin", "manager"}:
+        raise HTTPException(status_code=403, detail="Manager access required")
+    return session
+
+
+def _check_permission(session: dict, permission: str):
+    """Raise 403 if session user lacks permission. Falls back to role_permissions table."""
+    username = session.get("username", "")
+    if not db.has_permission(username, permission):
+        raise HTTPException(status_code=403, detail=f"Permission denied: {permission}")
+
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 class LoginBody(BaseModel):
     username: str
@@ -703,6 +717,18 @@ async def get_customers():
                 r["status_color"] = "orange"
             else:
                 r["status_color"] = "green"
+        # Merge in conversation claims
+        claims = {c["phone_number"]: c for c in db.get_all_claims()}
+        for r in rows:
+            phone = r.get("phone") or r.get("phone_number", "")
+            cl = claims.get(phone)
+            if cl:
+                r["claimed_by"] = cl.get("claimed_by")
+                r["claimed_by_name"] = cl.get("claimed_by_name")
+                r["donna_paused"] = 1
+            else:
+                r["claimed_by"] = None
+                r["claimed_by_name"] = None
         return {"customers": rows, "count": len(rows)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1138,12 +1164,12 @@ async def test_push_notification(session=Depends(require_auth)):
 
 # ── User management (admin only) ──────────────────────────────────────────────
 
-VALID_ROLES = {"admin", "manager", "agent", "viewer"}
+VALID_ROLES = {"admin", "manager", "support", "viewer"}
 
 ROLE_LABELS = {
     "admin":   "Admin — full access",
     "manager": "Manager — reports + customers, no settings",
-    "agent":   "Agent — own customers + basic tools",
+    "support": "Support — customer tickets + WhatsApp",
     "viewer":  "Viewer — read-only dashboard",
 }
 
@@ -1234,3 +1260,220 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
         return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Role Permissions API ──────────────────────────────────────────────────────
+
+ALL_PERMISSIONS = [
+    "view_financials", "view_reports", "manage_users", "manage_roles",
+    "manage_settings", "view_customers", "chat_customers", "send_whatsapp",
+    "claim_conversation", "view_eod_summary", "view_calendar", "view_email",
+    "escalate_tickets", "view_team_chat", "send_email_draft",
+]
+
+PERMISSION_LABELS = {
+    "view_financials":    "View financial data (P&L, overdue invoices)",
+    "view_reports":       "View EOD & team reports",
+    "manage_users":       "Create & manage users",
+    "manage_roles":       "Edit role permissions",
+    "manage_settings":    "Change app settings",
+    "view_customers":     "View customer list & conversations",
+    "chat_customers":     "Send messages to customers",
+    "send_whatsapp":      "Send outbound WhatsApp messages",
+    "claim_conversation": "Claim/take over customer conversations",
+    "view_eod_summary":   "Receive EOD team summary",
+    "view_calendar":      "Access calendar integration",
+    "view_email":         "Access email integration",
+    "escalate_tickets":   "Escalate support tickets",
+    "view_team_chat":     "View team WhatsApp conversations",
+    "send_email_draft":   "Draft & send emails (with approval)",
+}
+
+@app.get("/api/permissions")
+async def get_permissions(session=Depends(require_admin)):
+    """Return full permission matrix for all roles."""
+    matrix = db.get_all_role_permissions()
+    return {
+        "matrix": matrix,
+        "permissions": ALL_PERMISSIONS,
+        "labels": PERMISSION_LABELS,
+    }
+
+
+class PermissionUpdateBody(BaseModel):
+    role: str
+    permission: str
+    granted: bool
+
+
+@app.patch("/api/permissions")
+async def update_permission(body: PermissionUpdateBody, session=Depends(require_admin)):
+    """Toggle a single permission flag for a role."""
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if body.permission not in ALL_PERMISSIONS:
+        raise HTTPException(status_code=400, detail="Invalid permission")
+    if body.role == "admin":
+        raise HTTPException(status_code=400, detail="Admin always has full permissions")
+    db.set_role_permission(body.role, body.permission, body.granted)
+    return {"ok": True, "role": body.role, "permission": body.permission, "granted": body.granted}
+
+
+# ── Pre-create user endpoint ──────────────────────────────────────────────────
+
+class CreateUserBody(BaseModel):
+    username: str
+    display_name: str
+    role: str = "support"
+
+
+@app.post("/api/users")
+async def create_user_api(body: CreateUserBody, session=Depends(require_admin)):
+    """Pre-create a user before first login."""
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Role must be one of: {sorted(VALID_ROLES)}")
+    ok = db.create_donna_user_manual(body.username, body.display_name, body.role)
+    if not ok:
+        raise HTTPException(status_code=409, detail="User already exists")
+    return {"ok": True, "username": body.username, "display_name": body.display_name, "role": body.role}
+
+
+# ── Conversation Claiming ─────────────────────────────────────────────────────
+
+@app.post("/api/customers/{phone_number}/claim")
+async def claim_conversation_api(phone_number: str, session=Depends(require_auth)):
+    """Claim a customer conversation for human handling (pauses Donna AI)."""
+    _check_permission(session, "claim_conversation")
+    username = session.get("username", "")
+    display_name = _display_name_for(username)
+    ok = db.claim_conversation(phone_number, username, display_name)
+    if not ok:
+        existing = db.get_conversation_claim(phone_number)
+        raise HTTPException(status_code=409, detail=f"Already claimed by {existing.get('claimed_by_name', existing.get('claimed_by'))}")
+    return {"ok": True, "phone_number": phone_number, "claimed_by": username, "claimed_by_name": display_name}
+
+
+@app.post("/api/customers/{phone_number}/release")
+async def release_conversation_api(phone_number: str, session=Depends(require_auth)):
+    """Release a claimed conversation back to Donna."""
+    username = session.get("username", "")
+    role = session.get("role", "support")
+    claim = db.get_conversation_claim(phone_number)
+    if claim and claim.get("claimed_by") != username and role != "admin":
+        raise HTTPException(status_code=403, detail="You can only release your own claims")
+    db.release_conversation(phone_number, username)
+    return {"ok": True, "phone_number": phone_number}
+
+
+@app.get("/api/conversations/claims")
+async def get_claims_api(session=Depends(require_auth)):
+    """Return all active conversation claims."""
+    return {"claims": db.get_all_claims()}
+
+
+# ── Outbound WhatsApp Composer ────────────────────────────────────────────────
+
+class OutboundWABody(BaseModel):
+    phone_number: str
+    message: str
+    template_name: str = None
+    template_params: list = None
+
+
+_send_whatsapp_fn = None
+
+def register_send_whatsapp(fn):
+    """Register the function that sends WhatsApp messages (from cloud_agent)."""
+    global _send_whatsapp_fn
+    _send_whatsapp_fn = fn
+
+
+@app.post("/api/whatsapp/send")
+async def send_whatsapp_outbound(body: OutboundWABody, session=Depends(require_auth)):
+    """Send an outbound WhatsApp message to any phone number."""
+    _check_permission(session, "send_whatsapp")
+    if _send_whatsapp_fn is None:
+        raise HTTPException(status_code=503, detail="WhatsApp sender not initialised")
+
+    phone = body.phone_number
+    if not phone.startswith("+"):
+        phone = "+" + phone
+
+    username = session.get("username", "")
+    sender_name = _display_name_for(username)
+
+    try:
+        if body.template_name:
+            await _send_whatsapp_fn(phone, None, template_name=body.template_name, template_params=body.template_params or [])
+        else:
+            await _send_whatsapp_fn(phone, body.message)
+
+        # Log the outbound message
+        try:
+            import database as _db2
+            with _db2._conn() as conn:
+                conn.execute("""
+                    INSERT INTO customer_conversations
+                        (phone_number, direction, message_content, handled_by)
+                    VALUES (?, 'outbound', ?, ?)
+                    ON CONFLICT DO NOTHING
+                """, (phone, body.message or f"[template:{body.template_name}]", sender_name))
+        except Exception:
+            pass
+
+        return {"ok": True, "to": phone, "sender": sender_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/whatsapp/check-window/{phone_number}")
+async def check_wa_window(phone_number: str, session=Depends(require_auth)):
+    """Check if the 24h WhatsApp messaging window is open for a customer."""
+    phone = phone_number if phone_number.startswith("+") else "+" + phone_number
+    try:
+        with db._conn() as conn:
+            row = conn.execute("""
+                SELECT MAX(timestamp) as last_inbound
+                FROM customer_conversations
+                WHERE phone_number=? AND direction='inbound'
+            """, (phone,)).fetchone()
+        if row and row["last_inbound"]:
+            from datetime import datetime, timedelta
+            last = datetime.fromisoformat(row["last_inbound"].replace("Z","").replace(" ","T"))
+            window_open = (datetime.utcnow() - last) < timedelta(hours=24)
+        else:
+            window_open = False
+        return {"phone_number": phone, "window_open": window_open,
+                "last_inbound": row["last_inbound"] if row else None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Contact enrichment endpoint ───────────────────────────────────────────────
+
+class ContactEnrichBody(BaseModel):
+    name: str = None
+    email: str = None
+    company: str = None
+    need_category: str = None
+    status: str = None
+
+
+@app.patch("/api/customers/{phone_number}/enrich")
+async def enrich_contact(phone_number: str, body: ContactEnrichBody, session=Depends(require_auth)):
+    """Update enrichment fields on a customer contact."""
+    kwargs = {k: v for k, v in body.dict().items() if v}
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    db.update_contact_enrichment(phone_number, **kwargs)
+    return {"ok": True, "phone_number": phone_number, "updated": list(kwargs.keys())}
+
+
+# ── My permissions (for frontend role-gating) ─────────────────────────────────
+
+@app.get("/api/auth/permissions")
+async def my_permissions(session=Depends(require_auth)):
+    """Return permissions for the current user."""
+    username = session.get("username", "")
+    perms = db.get_role_permissions(session.get("role", "support"))
+    return {"username": username, "role": session.get("role"), "permissions": perms}

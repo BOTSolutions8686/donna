@@ -219,6 +219,7 @@ const TOOLS=[
     {id:'session_log',      label:'Session Log'},
     {id:'wa_settings',      label:'WhatsApp Settings'},
     {id:'user_mgmt',        label:'User Management'},
+    {id:'role_perms',       label:'Role Permissions'},
   ]},
 ];
 
@@ -510,6 +511,52 @@ function MemberCard({member,active,onClick}){
   </button>;
 }
 
+
+function ClaimButton({phone,loggedIn}){
+  const [claim,setClaim]=React.useState(null);
+  const [loading,setLoading]=React.useState(false);
+
+  const refresh=()=>{
+    authFetch('/api/conversations/claims').then(d=>{
+      if(d&&d.claims){
+        const c=d.claims.find(x=>x.phone_number===phone);
+        setClaim(c||null);
+      }
+    });
+  };
+  React.useEffect(()=>{refresh();const t=setInterval(refresh,10000);return()=>clearInterval(t);},[phone]);
+
+  const doClaim=async()=>{
+    setLoading(true);
+    const r=await authFetch(`/api/customers/${encodeURIComponent(phone)}/claim`,{method:'POST'});
+    setLoading(false);
+    if(r&&r.ok) refresh();
+    else if(r?.detail) alert(r.detail);
+  };
+
+  const doRelease=async()=>{
+    setLoading(true);
+    await authFetch(`/api/customers/${encodeURIComponent(phone)}/release`,{method:'POST'});
+    setLoading(false);
+    refresh();
+  };
+
+  const me=loggedIn?.username;
+  const myClaim=claim&&claim.claimed_by===me;
+
+  if(claim){
+    return <span style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--amber-dim,#92400e20)',color:'var(--amber)',borderRadius:4,padding:'1px 7px',fontSize:10,fontWeight:600}}>
+      ✍️ {myClaim?'You':''+claim.claimed_by_name} handling
+      {(myClaim||loggedIn?.role==='admin')&&<button onClick={doRelease} disabled={loading} style={{background:'none',border:'none',color:'var(--amber)',cursor:'pointer',fontSize:10,marginLeft:2}}>Release</button>}
+    </span>;
+  }
+
+  return <button onClick={doClaim} disabled={loading}
+    style={{background:'var(--teal-dim)',color:'var(--teal)',border:'1px solid var(--teal)',borderRadius:4,padding:'1px 8px',fontSize:10,fontWeight:600,cursor:'pointer'}}>
+    {loading?'…':'Claim'}
+  </button>;
+}
+
 function CustomerCard({customer,active,onClick,unreadCount}){
   const sc={green:{bar:'var(--green)',dot:'var(--green)'},orange:{bar:'var(--amber)',dot:'var(--amber)'},red:{bar:'var(--red)',dot:'var(--red)'}}[customer.status]||{bar:'var(--green)',dot:'var(--green)'};
   const isFlagged=customer.status==='orange'||customer.status==='red';
@@ -534,6 +581,7 @@ function CustomerCard({customer,active,onClick,unreadCount}){
       </div>
       <div style={{fontSize:11,color:'var(--text-3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingLeft:35}}>{customer.lastMsg}</div>
       {isFlagged&&<div style={{paddingLeft:35}}><span style={{fontSize:10,color:'var(--amber)',fontWeight:500}}>🚩 Flagged</span></div>}
+      {customer.claimed_by&&<div style={{paddingLeft:35}}><span style={{fontSize:9,color:'var(--text-3)'}}>✍️ {customer.claimed_by_name||customer.claimed_by}</span></div>}
     </div>
   </button>;
 }
@@ -668,13 +716,147 @@ function ContactEditPanel({phone,onClose,onSave}){
 }
 
 
+
+
+function OutboundWAComposer({onClose,onSent}){
+  const [phone,setPhone]=React.useState('');
+  const [message,setMessage]=React.useState('');
+  const [windowOpen,setWindowOpen]=React.useState(null);
+  const [checking,setChecking]=React.useState(false);
+  const [sending,setSending]=React.useState(false);
+  const [error,setError]=React.useState('');
+
+  const checkWindow=async(num)=>{
+    if(!num||num.length<7) return;
+    setChecking(true);
+    const d=await authFetch(`/api/whatsapp/check-window/${encodeURIComponent(num)}`);
+    setChecking(false);
+    if(d) setWindowOpen(d.window_open);
+  };
+
+  const send=async()=>{
+    if(!phone.trim()||!message.trim()){setError('Phone and message required');return;}
+    setSending(true);setError('');
+    const d=await authFetch('/api/whatsapp/send',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phone_number:phone.trim(),message:message.trim()})
+    });
+    setSending(false);
+    if(d&&d.ok){onSent&&onSent(phone.trim());onClose();}
+    else setError(d?.detail||'Send failed');
+  };
+
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+    <div style={{background:'var(--bg1)',borderRadius:12,padding:24,width:420,maxWidth:'90vw',display:'flex',flexDirection:'column',gap:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>New WhatsApp Message</div>
+        <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18}}>✕</button>
+      </div>
+      <div>
+        <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>Phone number (with country code)</div>
+        <input value={phone} onChange={e=>{setPhone(e.target.value);setWindowOpen(null);}}
+          onBlur={()=>checkWindow(phone)}
+          placeholder="+966500000000"
+          style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
+            padding:'7px 10px',color:'var(--text-1)',fontSize:13,outline:'none',boxSizing:'border-box'}}/>
+        {windowOpen!==null&&<div style={{marginTop:4,fontSize:10,color:windowOpen?'var(--teal)':'var(--amber)'}}>
+          {checking?'Checking…':windowOpen?'✓ 24h window open — free text allowed':'⚠ Window closed — customer must message first to open window'}
+        </div>}
+      </div>
+      <div>
+        <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>Message</div>
+        <textarea value={message} onChange={e=>setMessage(e.target.value)} rows={4} placeholder="Type your message…"
+          style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
+            padding:'7px 10px',color:'var(--text-1)',fontSize:13,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+        <div style={{fontSize:9,color:'var(--text-3)',marginTop:2}}>{message.length} / 1024 chars</div>
+      </div>
+      {error&&<div style={{color:'var(--red)',fontSize:11}}>{error}</div>}
+      <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+        <button onClick={onClose} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'6px 16px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
+        <button onClick={send} disabled={sending||!message.trim()||!phone.trim()}
+          style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'6px 16px',fontSize:12,fontWeight:600,cursor:'pointer',opacity:(sending||!message.trim()||!phone.trim())?0.5:1}}>
+          {sending?'Sending…':'Send via WhatsApp'}
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
+function RolePermissionsPanel({onClose}){
+  const [matrix,setMatrix]=React.useState(null);
+  const [permissions,setPermissions]=React.useState([]);
+  const [labels,setLabels]=React.useState({});
+  const [saving,setSaving]=React.useState(null);
+  const ROLES=['manager','support','viewer'];
+  const ROLE_COLOR={manager:'amber',support:'green',viewer:'gray'};
+
+  const load=()=>{
+    authFetch('/api/permissions').then(d=>{
+      if(d){setMatrix(d.matrix||{});setPermissions(d.permissions||[]);setLabels(d.labels||{});}
+    });
+  };
+  React.useEffect(load,[]);
+
+  const toggle=async(role,perm,current)=>{
+    setSaving(role+'_'+perm);
+    await authFetch('/api/permissions',{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role,permission:perm,granted:!current})
+    });
+    setSaving(null);load();
+  };
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:560,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  return <div style={panelStyle}>
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Role Permissions</div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>✕</button>
+    </div>
+    <div style={{padding:'10px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',flexShrink:0}}>
+      <div style={{fontSize:11,color:'var(--text-3)'}}>Admin always has full access. Toggle permissions for other roles.</div>
+    </div>
+    {!matrix?<div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>Loading…</div>:
+    <div style={{overflowY:'auto',flex:1}}>
+      {/* Header row */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr repeat(3,70px)',padding:'8px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',position:'sticky',top:0}}>
+        <div style={{fontSize:10,fontWeight:700,color:'var(--text-3)',letterSpacing:'0.06em',textTransform:'uppercase'}}>Permission</div>
+        {ROLES.map(r=><div key={r} style={{textAlign:'center',fontSize:10,fontWeight:700,color:`var(--${ROLE_COLOR[r]})`,textTransform:'capitalize'}}>{r}</div>)}
+      </div>
+      {permissions.map(perm=><div key={perm} style={{display:'grid',gridTemplateColumns:'1fr repeat(3,70px)',padding:'9px 20px',borderBottom:'1px solid var(--border)',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:12,color:'var(--text-1)'}}>{labels[perm]||perm}</div>
+          <div style={{fontSize:9,color:'var(--text-3)',marginTop:1}}>{perm}</div>
+        </div>
+        {ROLES.map(role=>{
+          const granted=matrix[role]?.[perm]??false;
+          const key=role+'_'+perm;
+          return <div key={role} style={{display:'flex',justifyContent:'center'}}>
+            <button onClick={()=>toggle(role,perm,granted)} disabled={saving===key}
+              style={{width:28,height:16,borderRadius:8,border:'none',cursor:'pointer',
+                background:granted?'var(--teal)':'var(--bg3)',position:'relative',transition:'background 0.15s'}}>
+              <div style={{position:'absolute',top:2,width:12,height:12,borderRadius:'50%',
+                background:'#fff',transition:'left 0.15s',left:granted?14:2}}/>
+            </button>
+          </div>;
+        })}
+      </div>)}
+    </div>}
+  </div>;
+}
+
 function UserMgmtPanel({onClose}){
   const [users,setUsers]=React.useState([]);
   const [roles,setRoles]=React.useState({});
   const [saving,setSaving]=React.useState(null);
   const [editName,setEditName]=React.useState(null); // {username, value}
-  const ROLE_ORDER=['admin','manager','agent','viewer'];
-  const ROLE_COLOR={admin:'teal',manager:'amber',agent:'green',viewer:'gray'};
+  const [addingUser,setAddingUser]=React.useState(false);
+  const [newUser,setNewUser]=React.useState({username:'',display_name:'',role:'support'});
+  const [addError,setAddError]=React.useState('');
+  const ROLE_ORDER=['admin','manager','support','viewer'];
+  const ROLE_COLOR={admin:'teal',manager:'amber',support:'green',viewer:'gray'};
 
   const load=()=>{
     authFetch('/api/users').then(d=>{
@@ -702,6 +884,15 @@ function UserMgmtPanel({onClose}){
     setSaving(null);setEditName(null);load();
   };
 
+  const createUser=async()=>{
+    if(!newUser.username.trim()||!newUser.display_name.trim()){setAddError('Username and name required');return;}
+    setSaving('new_user');setAddError('');
+    const resp=await authFetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(newUser)});
+    setSaving(null);
+    if(resp&&resp.ok){setAddingUser(false);setNewUser({username:'',display_name:'',role:'support'});load();}
+    else{setAddError(resp?.detail||'Failed to create user');}
+  };
+
   const toggle=async(username,is_active)=>{
     setSaving(username+'_active');
     const ep=is_active?'deactivate':'activate';
@@ -721,7 +912,28 @@ function UserMgmtPanel({onClose}){
       <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>✕</button>
     </div>
     <div style={{padding:'12px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',flexShrink:0}}>
-      <div style={{fontSize:11,color:'var(--text-3)'}}>Users are created automatically on first login via ERPNext credentials.</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontSize:11,color:'var(--text-3)'}}>Manage team access to Donna.</div>
+        <button onClick={()=>setAddingUser(v=>!v)} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:5,padding:'4px 10px',fontSize:11,fontWeight:600,cursor:'pointer'}}>+ Add User</button>
+      </div>
+      {addingUser&&<div style={{marginTop:10,display:'flex',flexDirection:'column',gap:6}}>
+        <input placeholder="Username / email" value={newUser.username} onChange={e=>setNewUser({...newUser,username:e.target.value})}
+          style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,padding:'5px 8px',color:'var(--text-1)',fontSize:12,outline:'none'}}/>
+        <input placeholder="Display name" value={newUser.display_name} onChange={e=>setNewUser({...newUser,display_name:e.target.value})}
+          style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,padding:'5px 8px',color:'var(--text-1)',fontSize:12,outline:'none'}}/>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
+          <select value={newUser.role} onChange={e=>setNewUser({...newUser,role:e.target.value})}
+            style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,padding:'5px 8px',color:'var(--text-1)',fontSize:12,flex:1,outline:'none'}}>
+            {['admin','manager','support','viewer'].map(r=><option key={r} value={r}>{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
+          </select>
+          <button onClick={createUser} disabled={saving==='new_user'}
+            style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:5,padding:'5px 12px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+            {saving==='new_user'?'…':'Create'}
+          </button>
+          <button onClick={()=>setAddingUser(false)} style={{background:'none',border:'1px solid var(--border)',borderRadius:5,padding:'5px 8px',fontSize:11,color:'var(--text-3)',cursor:'pointer'}}>Cancel</button>
+        </div>
+        {addError&&<div style={{color:'var(--red)',fontSize:11}}>{addError}</div>}
+      </div>}
     </div>
     <div style={{overflowY:'auto',flex:1,padding:'8px 0'}}>
       {ROLE_ORDER.map(role=>{
@@ -899,7 +1111,7 @@ function WhatsAppSettingsPanel({onClose}){
 }
 
 
-function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone}){
+function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose,customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone,onNewWA}){
   return <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
     <div style={{padding:'13px 12px 11px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
       <div style={{display:'flex',alignItems:'center',gap:9}}>
@@ -939,7 +1151,10 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
 
       {/* Customers */}
       <div style={{padding:'8px 8px 4px',flex:1}}>
-        <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase',padding:'0 8px 7px'}}>Customers</div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 8px 7px'}}>
+          <div style={{fontSize:9,color:'var(--text-3)',fontWeight:600,letterSpacing:'0.1em',textTransform:'uppercase'}}>Customers</div>
+          {onNewWA&&<button onClick={onNewWA} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:4,padding:'2px 8px',fontSize:9,fontWeight:700,cursor:'pointer'}}>+ New</button>}
+        </div>
         <div style={{display:'flex',gap:4,marginBottom:8,padding:'0 2px'}}>
           {[['all','All'],['active','Active'],['flagged','🚩'],['waiting','Wait']].map(([key,label])=>(
             <button key={key} onClick={()=>setCustomerFilter(key)} style={{flex:1,padding:'5px 2px',borderRadius:5,fontSize:10,fontWeight:600,cursor:'pointer',transition:'all 0.15s',background:customerFilter===key?'var(--teal-dim)':'transparent',color:customerFilter===key?'var(--teal)':'var(--text-3)',border:`1px solid ${customerFilter===key?'rgba(14,196,180,0.3)':'transparent'}`}}>
@@ -1101,6 +1316,8 @@ function App(){
   const [showNotifPanel,setShowNotifPanel]=useState(false);
   const [showWASettings,setShowWASettings]=useState(false);
   const [showUserMgmt,setShowUserMgmt]=useState(false);
+  const [showRolePerms,setShowRolePerms]=useState(false);
+  const [showComposer,setShowComposer]=useState(false);
   const [editingContact,setEditingContact]=useState(null);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
@@ -1434,6 +1651,7 @@ function App(){
   const triggerTool=async toolId=>{
     if(toolId==='wa_settings'){setShowWASettings(true);setToolsOpen(false);return;}
     if(toolId==='user_mgmt'){setShowUserMgmt(true);setToolsOpen(false);return;}
+    if(toolId==='role_perms'){setShowRolePerms(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
     setActiveTool(toolId);
@@ -1473,7 +1691,7 @@ function App(){
     const {outcome}=await installPrompt.userChoice;
     if(outcome==='accepted'){setInstallDone(true);setInstallPrompt(null);localStorage.setItem('donna-installed','1');}
   },[installPrompt]);
-  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone};
+  const sidebarProps={activeThread,setActiveThread,liveCustomers,escalations,unreadCounts,loggedIn,isDark,setIsDark,onClose:()=>setSidebarOpen(false),customerFilter,setCustomerFilter,filteredCustomers,filterCounts,liveTeam,installPrompt,onInstall,installDone,onNewWA:()=>setShowComposer(true)};
 
   if(!authChecked)return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'var(--bg0)',color:'var(--text-3)',fontSize:13}}>Loading…</div>;
   if(!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
@@ -1548,6 +1766,7 @@ function App(){
                 {isCustomerThread&&<button onClick={()=>setEditingContact(editingContact===activeThread?null:activeThread)} style={{padding:'2px 7px',borderRadius:4,background:'var(--bg2)',border:'1px solid var(--border)',color:'var(--text-3)',fontSize:10,cursor:'pointer',flexShrink:0}}>{editingContact===activeThread?'✕':'Edit'}</button>}
               </div>
               <div style={{fontSize:11,color:'var(--text-3)',marginTop:1,display:'flex',alignItems:'center',gap:6}}>
+                {activeCustomer&&<ClaimButton phone={activeCustomer.phone} loggedIn={loggedIn}/>}
                 {activeCustomer&&<span style={{display:'inline-flex',alignItems:'center',gap:4,background:'#25d36620',color:'#25d366',borderRadius:4,padding:'1px 7px',fontSize:10,fontWeight:600}}>
                   <svg width="9" height="9" viewBox="0 0 14 14" fill="none"><path d="M7 1C3.7 1 1 3.7 1 7c0 1.1.3 2.1.9 3L1 13l3.2-.9C5.3 12.7 6.1 13 7 13c3.3 0 6-2.7 6-6S10.3 1 7 1Z" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>WhatsApp
                 </span>}
@@ -1685,6 +1904,9 @@ function App(){
     <WhatsAppSettingsPanel onClose={()=>setShowWASettings(false)}/>}
   {showUserMgmt&&loggedIn?.role==='admin'&&
     <UserMgmtPanel onClose={()=>setShowUserMgmt(false)}/>}
+  {showRolePerms&&loggedIn?.role==='admin'&&
+    <RolePermissionsPanel onClose={()=>setShowRolePerms(false)}/>}
+  {showComposer&&<OutboundWAComposer onClose={()=>setShowComposer(false)} onSent={()=>{}}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
     background:'var(--bg1)',border:'1px solid var(--border-hi)',
