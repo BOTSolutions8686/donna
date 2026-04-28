@@ -3338,7 +3338,7 @@ async def _finalize_eod_report(sender_number: str, sender_name: str, transcript:
 
 
 async def job_eod_report_request(app):
-    """16:45 KSA (13:45 UTC) — Ask all team members for their EOD update."""
+    """16:30 KSA — Ask all team members for their EOD update."""
     members = CONFIG.get('team_members', [])
     for m in members:
         wa = m.get('whatsapp', '')
@@ -3360,7 +3360,7 @@ async def job_eod_report_request(app):
 
 
 async def job_eod_summary(app):
-    """18:30 KSA (15:30 UTC) — Post EOD summary digest to Talha."""
+    """16:55 KSA — Post EOD summary digest to Talha."""
     from datetime import date
     import anthropic as _ant
 
@@ -6116,11 +6116,11 @@ def main():
         )
         scheduler.add_job(
             lambda: _run(lambda: job_eod_report_request(app)),
-            "cron", hour=13, minute=45, id="eod_report_request",
+            "cron", hour=16, minute=30, id="eod_report_request",
         )
         scheduler.add_job(
             lambda: _run(lambda: job_eod_summary(app)),
-            "cron", hour=15, minute=30, id="eod_summary",
+            "cron", hour=16, minute=55, id="eod_summary",
         )
         # ── Donna web dashboard ──────────────────────────────────────────────────
         web_api.set_ask_claude(ask_claude)
@@ -6137,7 +6137,7 @@ def main():
             "team_reminders(9:30am daily) | team_accountability(mon 8:30am) | "
             "monthly_pl(1st 9am) | refresh_coa(sun 11pm) | "
             "whatsapp_poll(5min-fallback) | email_check(30min) | delivery_check(10min) | takeover_expiry(30min) | "
-            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min)"
+            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA)"
         )
 
     async def post_shutdown(app):
