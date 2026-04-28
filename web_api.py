@@ -1697,6 +1697,19 @@ async def release_conversation_api(phone_number: str, session=Depends(require_au
     if claim and claim.get("claimed_by") != username and role != "admin":
         raise HTTPException(status_code=403, detail="You can only release your own claims")
     db.release_conversation(phone_number, username)
+    # After release, check if the last message was inbound — if so, Donna replies
+    try:
+        history = db.get_customer_conversation_history(phone_number, limit=5)
+        if history and history[-1].get("direction") == "inbound":
+            last_msg = history[-1].get("message_content", "")
+            import cloud_agent as _ca_rel
+            import asyncio as _rel_aio
+            _rel_aio.get_event_loop().create_task(
+                _ca_rel.handle_customer_message(phone_number, last_msg, wa_name=None)
+            )
+            _log.info("release: queued Donna reply to %s after human release", phone_number)
+    except Exception as _rel_err:
+        _log.debug("release post-check error: %s", _rel_err)
     return {"ok": True, "phone_number": phone_number}
 
 
