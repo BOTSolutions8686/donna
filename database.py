@@ -943,6 +943,10 @@ def _migrate_db():
             conn.execute("ALTER TABLE team_conversations ADD COLUMN sent_wa_message_name TEXT")
         if 'delivery_status' not in cols:
             conn.execute("ALTER TABLE team_conversations ADD COLUMN delivery_status TEXT")
+        # customer_conversations delivery_status
+        cc_cols = [r[1] for r in conn.execute("PRAGMA table_info(customer_conversations)").fetchall()]
+        if 'delivery_status' not in cc_cols:
+            conn.execute("ALTER TABLE customer_conversations ADD COLUMN delivery_status TEXT")
         if 'conversation_thread_id' not in cols:
             conn.execute("ALTER TABLE team_conversations ADD COLUMN conversation_thread_id TEXT")
         # WhatsApp templates awareness table
@@ -1232,6 +1236,11 @@ def update_delivery_status(sent_wa_message_name: str, status: str):
             "UPDATE team_conversations SET delivery_status=? WHERE sent_wa_message_name=?",
             (status, sent_wa_message_name)
         )
+        conn.execute(
+            "UPDATE customer_conversations SET delivery_status=? "
+            "WHERE wa_message_name=? AND direction='outbound'",
+            (status, sent_wa_message_name)
+        )
 
 def get_untracked_outbound(hours=24):
     """Get outbound messages with no delivery status, sent in last N hours."""
@@ -1414,7 +1423,7 @@ def get_customer_conversation_history(phone_number, limit=50):
         rows = conn.execute(
             "SELECT direction, message_content, "
             "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp, "
-            "ticket_reference, handled_by, language "
+            "ticket_reference, handled_by, language, delivery_status, wa_message_name "
             "FROM customer_conversations WHERE phone_number=? "
             "ORDER BY timestamp ASC LIMIT ?",
             (phone_number, limit)
@@ -1531,6 +1540,7 @@ def get_all_customers_with_last_message():
                 c.flag_reason,
                 c.total_messages,
                 c.last_active,
+                c.contact_type,
                 (SELECT message_content FROM customer_conversations
                  WHERE phone_number=c.phone_number ORDER BY timestamp DESC LIMIT 1) AS last_message,
                 (SELECT timestamp FROM customer_conversations
@@ -1542,7 +1552,7 @@ def get_all_customers_with_last_message():
                  WHERE phone_number=c.phone_number AND status IN ('pending','taken')
                  ORDER BY created_at DESC LIMIT 1) AS escalation_reason
             FROM contacts c
-            WHERE c.contact_type='customer'
+            WHERE c.contact_type NOT IN ('blocked','vendor')
             ORDER BY c.last_active DESC
         """).fetchall()
     return [dict(r) for r in rows]

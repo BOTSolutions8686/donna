@@ -1719,6 +1719,91 @@ async def get_claims_api(session=Depends(require_auth)):
     return {"claims": db.get_all_claims()}
 
 
+# ── Ticket from chat ──────────────────────────────────────────────────────────
+
+class TicketDraftBody(BaseModel):
+    phone_number: str
+    message_content: str
+
+class TicketCreateBody(BaseModel):
+    phone_number: str
+    title: str
+    description: str
+    priority: str = "Medium"
+
+@app.post("/api/tickets/draft-from-message")
+async def draft_ticket_from_message(body: TicketDraftBody, session=Depends(require_auth)):
+    """Use Claude to draft a ticket title/description from a customer message."""
+    _check_permission(session, "view_customers")
+    try:
+        import anthropic as _ant2
+        client = _ant2.Anthropic(api_key=CONFIG["anthropic"]["api_key"])
+        contact = db.get_contact(body.phone_number)
+        cname = (contact or {}).get("name") or body.phone_number
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=(
+                "You extract support ticket fields from a WhatsApp message. "
+                "Reply ONLY with a JSON object with keys: title (max 60 chars), "
+                "description (1-2 sentences), priority (Low/Medium/High/Urgent). "
+                "No markdown, no extra text."
+            ),
+            messages=[{"role": "user", "content": (
+                f"Customer: {cname}\nMessage: {body.message_content}"
+            )}],
+        )
+        import json as _jdraft
+        raw = resp.content[0].text.strip()
+        # strip possible markdown fences
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        data = _jdraft.loads(raw)
+        return {
+            "title": data.get("title", body.message_content[:60]),
+            "description": data.get("description", body.message_content),
+            "priority": data.get("priority", "Medium"),
+        }
+    except Exception as e:
+        _log.warning("draft_ticket_from_message: %s", e)
+        return {
+            "title": body.message_content[:60],
+            "description": body.message_content,
+            "priority": "Medium",
+        }
+
+@app.post("/api/tickets/create-from-chat")
+async def create_ticket_from_chat(body: TicketCreateBody, session=Depends(require_auth)):
+    """Create an ERPNext ticket from chat and send WA confirmation to customer."""
+    _check_permission(session, "view_customers")
+    try:
+        result = erp.create_ticket(
+            subject=body.title,
+            description=body.description,
+            priority=body.priority,
+        )
+        ticket_name = result.get("name", "")
+        # Link ticket reference to customer conversation
+        if ticket_name:
+            db.upsert_contact(body.phone_number, contact_type=None)
+        # Send WhatsApp confirmation to customer
+        confirm_msg = (
+            f"Your request has been logged as support ticket {ticket_name}. "
+            f"Our team will follow up with you shortly. ✓"
+        )
+        try:
+            erp.send_whatsapp(body.phone_number, confirm_msg)
+            db.log_customer_conversation(
+                body.phone_number, "outbound", confirm_msg,
+                ticket_ref=ticket_name, handled_by="donna",
+            )
+        except Exception as _we:
+            _log.warning("Ticket WA confirmation failed: %s", _we)
+        return {"ok": True, "ticket_name": ticket_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Outbound WhatsApp Composer ────────────────────────────────────────────────
 
 class OutboundWABody(BaseModel):

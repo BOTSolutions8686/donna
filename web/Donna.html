@@ -428,6 +428,81 @@ function FlagCard({reason}){
   </div>;
 }
 
+
+function TicketDraftPanel({phone,initialText,onClose}){
+  const [draft,setDraft]=React.useState(null);
+  const [form,setForm]=React.useState({title:'',description:'',priority:'Medium'});
+  const [creating,setCreating]=React.useState(false);
+  const [done,setDone]=React.useState(false);
+  const [err,setErr]=React.useState('');
+  React.useEffect(()=>{
+    setDraft(null);setDone(false);setErr('');
+    authFetch('/api/tickets/draft-from-message',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phone_number:phone,message_content:initialText}),
+    }).then(d=>{
+      if(d){setForm({title:d.title||'',description:d.description||'',priority:d.priority||'Medium'});setDraft(d);}
+    }).catch(()=>setDraft({}));
+  },[initialText]);
+
+  const create=async()=>{
+    if(!form.title){setErr('Title required');return;}
+    setCreating(true);setErr('');
+    const r=await authFetch('/api/tickets/create-from-chat',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phone_number:phone,...form}),
+    }).catch(()=>null);
+    setCreating(false);
+    if(r&&r.ok){setDone(true);}
+    else setErr(r?.detail||'Failed to create ticket');
+  };
+
+  const inp={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:5,
+    padding:'6px 8px',color:'var(--text-1)',fontSize:12,boxSizing:'border-box',outline:'none'};
+
+  return <div style={{position:'fixed',bottom:80,right:16,width:340,background:'var(--bg1)',
+    border:'1px solid var(--border-hi)',borderRadius:10,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',
+    zIndex:500,overflow:'hidden'}}>
+    <div style={{padding:'12px 14px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <span style={{fontSize:13,fontWeight:600,color:'var(--text-1)'}}>Create Ticket</span>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:16}}>✕</button>
+    </div>
+    {done
+      ? <div style={{padding:20,textAlign:'center'}}>
+          <div style={{fontSize:20,marginBottom:8}}>✓</div>
+          <div style={{fontSize:12,color:'var(--teal)'}}>Ticket created &amp; customer notified</div>
+          <button onClick={onClose} style={{marginTop:12,background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'6px 16px',fontSize:12,fontWeight:600,cursor:'pointer'}}>Close</button>
+        </div>
+      : <div style={{padding:14,display:'flex',flexDirection:'column',gap:9}}>
+          {draft===null&&<div style={{fontSize:12,color:'var(--text-3)',textAlign:'center',padding:'8px 0'}}>Donna is drafting…</div>}
+          {draft!==null&&<>
+            <div>
+              <div style={{fontSize:10,color:'var(--text-3)',marginBottom:3}}>TITLE</div>
+              <input value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} style={inp}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'var(--text-3)',marginBottom:3}}>DESCRIPTION</div>
+              <textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} rows={3} style={{...inp,resize:'none',lineHeight:1.5}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'var(--text-3)',marginBottom:3}}>PRIORITY</div>
+              <select value={form.priority} onChange={e=>setForm(p=>({...p,priority:e.target.value}))} style={inp}>
+                {['Low','Medium','High','Urgent'].map(p=><option key={p}>{p}</option>)}
+              </select>
+            </div>
+            {err&&<div style={{fontSize:11,color:'var(--red)'}}>{err}</div>}
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={onClose} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'5px 14px',fontSize:11,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
+              <button onClick={create} disabled={creating} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'5px 16px',fontSize:11,fontWeight:600,cursor:'pointer',opacity:creating?0.5:1}}>
+                {creating?'Creating…':'Create & Notify'}
+              </button>
+            </div>
+          </>}
+        </div>
+    }
+  </div>;
+}
+
 function ChatMessage({msg,isCustomerThread}){
   if(msg.type==='flag') return <FlagCard reason={msg.flagReason}/>;
   const isRight=isCustomerThread?msg.from==='donna':msg.from==='user';
@@ -453,8 +528,20 @@ function ChatMessage({msg,isCustomerThread}){
       </div>
       <div style={{fontSize:10,color:'var(--text-3)',marginTop:4,fontFamily:'var(--mono)',display:'flex',alignItems:'center',gap:6,justifyContent:isRight?'flex-end':'flex-start'}}>
         <span>{msg.ts}{isHuman?' · You':''}</span>
+        {/* Delivery receipt ticks for outbound messages */}
+        {isRight&&isCustomerThread&&(()=>{
+          const st=msg.delivery_status;
+          if(st==='read') return <span style={{color:'#4fc3f7',fontSize:12,letterSpacing:-1}}>✓✓</span>;
+          if(st==='delivered') return <span style={{color:'var(--text-3)',fontSize:12,letterSpacing:-1}}>✓✓</span>;
+          if(st==='sent') return <span style={{color:'var(--text-3)',fontSize:12}}>✓</span>;
+          return null;
+        })()}
         {isDonna&&!ApiComp&&<button onClick={()=>navigator.clipboard?.writeText(msg.text||'').catch(()=>{})} title="Copy message" style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-3)',padding:'0 2px',borderRadius:3,lineHeight:1,opacity:0.55,fontSize:11}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.55}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>}
+        {/* Ticket icon — only on customer inbound messages in customer thread */}
+        {isCustomerThread&&!isRight&&msg.onCreateTicket&&<button onClick={()=>msg.onCreateTicket(msg.raw_text||msg.text||'')} title="Create ticket from this message" style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-3)',padding:'0 2px',borderRadius:3,lineHeight:1,opacity:0.55,fontSize:11}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0.55}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
         </button>}
       </div>
     </div>
@@ -584,6 +671,8 @@ function CustomerCard({customer,active,onClick,unreadCount}){
       <div style={{fontSize:11,color:'var(--text-3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingLeft:35}}>{customer.lastMsg}</div>
       {isFlagged&&<div style={{paddingLeft:35}}><span style={{fontSize:10,color:'var(--amber)',fontWeight:500}}>🚩 Flagged</span></div>}
       {customer.claimed_by&&<div style={{paddingLeft:35}}><span style={{fontSize:9,color:'var(--text-3)'}}>✍️ {customer.claimed_by_name||customer.claimed_by}</span></div>}
+      {customer.contact_type==='job_applicant'&&<div style={{paddingLeft:35}}><span style={{fontSize:9,color:'var(--purple,#a78bfa)',fontWeight:500,background:'rgba(167,139,250,0.1)',borderRadius:4,padding:'1px 5px'}}>🎓 Job Applicant</span></div>}
+      {customer.contact_type==='prospect'&&<div style={{paddingLeft:35}}><span style={{fontSize:9,color:'var(--teal)',fontWeight:500,background:'var(--teal-dim)',borderRadius:4,padding:'1px 5px'}}>Prospect</span></div>}
     </div>
   </button>;
 }
@@ -1743,6 +1832,7 @@ function App(){
   const [showEmailInbox,setShowEmailInbox]=useState(false);
   const [showGmailConnect,setShowGmailConnect]=useState(false);
   const [showCalendar,setShowCalendar]=useState(false);
+  const [ticketDraft,setTicketDraft]=useState(null); // {phone,text}
   const [coachingQ,setCoachingQ]=useState('');
   const [coachingA,setCoachingA]=useState('');
   const [coachingLoading,setCoachingLoading]=useState(false);
@@ -1919,6 +2009,7 @@ function App(){
           lastTime:c.last_message_time?(c.last_message_time||'').slice(11,16):'',
           flagReason:c.escalation_reason||'',
           claimed_by:c.claimed_by||null,claimed_by_name:c.claimed_by_name||null,
+          contact_type:c.contact_type||'customer',
         })));
       }).catch(()=>{});
       fetchApi('/api/escalations').then(d=>{if(d&&d.escalations)setEscalations(d.escalations);}).catch(()=>{});
@@ -1942,6 +2033,10 @@ function App(){
             text:m.message_content||'',
             ts:(m.timestamp_saudi||m.timestamp||'').slice(11,16),
             handled_by:m.handled_by,
+            delivery_status:m.delivery_status||null,
+            wa_message_name:m.wa_message_name||null,
+            raw_text:m.message_content||'',
+            onCreateTicket:m.direction==='inbound'?(txt=>setTicketDraft({phone:activeThread,text:txt})):undefined,
           })));
           const cnt=d.messages.filter(m=>m.direction==='inbound').length;
           const prev=prevMsgCountRef.current[activeThread]||0;
@@ -2380,6 +2475,7 @@ function App(){
   {showComposer&&<OutboundWAComposer onClose={()=>setShowComposer(false)} onSent={()=>{}}/>}
   {showEmailInbox&&<EmailInboxPanel onClose={()=>setShowEmailInbox(false)} loggedIn={loggedIn}/>}
   {showCalendar&&<CalendarPanel onClose={()=>setShowCalendar(false)}/>}
+  {ticketDraft&&<TicketDraftPanel phone={ticketDraft.phone} initialText={ticketDraft.text} onClose={()=>setTicketDraft(null)}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
     background:'var(--bg1)',border:'1px solid var(--border-hi)',

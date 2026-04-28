@@ -3983,6 +3983,21 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
     _ct = (contact or {}).get('contact_type', 'customer')
     _msg_count = (contact or {}).get('message_count', 0) or 0
     _name_known = bool(((contact or {}).get('name') or '').strip())
+
+    # Auto-detect job applicant intent
+    if _ct not in ('job_applicant', 'blocked'):
+        _ja_kw_en = ['apply for', 'job application', 'cooperative training', 'internship',
+                     'resume', 'cv ', ' cv,', 'vacancy', 'hiring', 'career', 'open position']
+        _ja_kw_ar = ['\u062a\u0642\u062f\u064a\u0645', '\u0648\u0638\u064a\u0641\u0629',
+                     '\u062a\u062f\u0631\u064a\u0628 \u062a\u0639\u0627\u0648\u0646\u064a',
+                     '\u062a\u062f\u0631\u064a\u0628\u064a', '\u0633\u064a\u0631\u0629 \u0630\u0627\u062a\u064a\u0629',
+                     '\u062a\u0648\u0638\u064a\u0641', '\u0648\u0638\u0627\u0626\u0641']
+        _recent_all = ' '.join(h.get('message_content', '') for h in history[-4:]).lower() + ' ' + content.lower()
+        if any(kw in _recent_all for kw in _ja_kw_en + _ja_kw_ar):
+            db.upsert_contact(sender_number, contact_type='job_applicant')
+            _ct = 'job_applicant'
+            log.info('Auto-detected job applicant: %s', sender_number)
+
     if _ct == 'prospect':
         system_prompt += (
             '\n\nCONTACT CONTEXT: This person is a PROSPECT (not yet a customer). '
@@ -3999,6 +4014,15 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
             '\n\nCONTACT CONTEXT: This person is a VENDOR or SUPPLIER. '
             'Be brief and professional. For invoices or procurement queries, '
             'direct them to accounts@botsolutions.tech.'
+        )
+    elif _ct == 'job_applicant':
+        system_prompt += (
+            '\n\nCONTACT CONTEXT: This person is a JOB APPLICANT. '
+            'Be warm and professional. Direct them to our careers page at '
+            'https://botsolutions.tech/careers for open positions and to submit their CV. '
+            'Do NOT create a support ticket for them. '
+            'If the conversation allows, lightly ask what role they are interested in '
+            '— one question only, keep it natural.'
         )
     # Message history context
     if _msg_count == 0:
