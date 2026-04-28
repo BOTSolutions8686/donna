@@ -1768,9 +1768,9 @@ function dedupMsgs(msgs) {
 }
 
 const makeInitialThreads=()=>({
-  donna:[{id:1,from:'donna',text:"Good morning. I'm live and monitoring operations. Run a tool from the panel, or ask me anything.",ts:'09:00'}],
-  talha:[{id:1,from:'donna',text:"Hi Talha. Dashboard is live. Let me know if you need anything.",ts:'09:00'}],
-  albaraa:[{id:1,from:'donna',text:"Good morning Al Baraa. Let me know if you need ticket info.",ts:'09:00'}],
+  donna:[{id:'init_donna',sortKey:'0000-00-00T09:00:00',from:'donna',text:"Good morning. I'm live and monitoring operations. Run a tool from the panel, or ask me anything.",ts:'09:00'}],
+  talha:[{id:'init_talha',sortKey:'0000-00-00T09:00:00',from:'donna',text:"Hi Talha. Dashboard is live. Let me know if you need anything.",ts:'09:00'}],
+  albaraa:[{id:'init_albaraa',sortKey:'0000-00-00T09:00:00',from:'donna',text:"Good morning Al Baraa. Let me know if you need ticket info.",ts:'09:00'}],
 });
 
 function App(){
@@ -1880,7 +1880,7 @@ function App(){
         })));
         // Merge: keep any opt_ messages added in this session, discard old db_ ones
         setThreads(prev=>{
-          const sessionMsgs=(prev.donna||[]).filter(m=>m.id.startsWith('opt_'));
+          const sessionMsgs=(prev.donna||[]).filter(m=>String(m.id).startsWith('opt_'));
           return {...prev,donna:sortMsgs(dedupMsgs([...msgs,...sessionMsgs]))};
         });
       }
@@ -2101,7 +2101,7 @@ function App(){
             setThreads(prev=>{
               const current=prev[activeThread]||[];
               // Keep opt_ messages not yet reflected in API response
-              const localOnly=current.filter(m=>m.id.startsWith('opt_')&&!apiIdSet.has(m.id));
+              const localOnly=current.filter(m=>String(m.id).startsWith('opt_')&&!apiIdSet.has(m.id));
               return {...prev,[activeThread]:sortMsgs(dedupMsgs([...apiMsgs,...localOnly]))};
             });
           }
