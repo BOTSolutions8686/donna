@@ -1134,3 +1134,98 @@ Implemented the three remaining items: template param inputs, per-user email pus
 
 ### What is next
 - All planned items complete ✅
+
+---
+
+## Session: 2026-04-28/29 — Bug fixes, message ordering, new features
+
+### Summary
+Investigation and fix session. Resolved two critical bugs that prevented Donna from replying to customers. Added three new features (delivery receipts, ticket-from-chat, job applicant type). Fixed message scrambling across all chat windows. Fixed mobile keyboard layout. Fixed cross-device sync. Fixed user identity recognition.
+
+### Bug fixes
+
+**Critical — Donna not replying to customers**
+- `database.py`: `is_customer_message_recently_processed` queried `customer_phone` (column does not exist — actual column is `phone_number`). This crashed `job_whatsapp_inbound_poll` on every run since the function was introduced, making the entire 5-min fallback poll dead.
+- `cloud_agent.py`: `handle_customer_message` crashed with `AttributeError: 'NoneType'.strip()` when `contact['name']` field is NULL in DB. `.get('name', '')` only returns the default when the key is absent, not when the value is None. Fixed: `((contact or {}).get('name') or '').strip()`.
+- Manually triggered Donna to reply to missed customer message (+966504471537) via one-off script.
+
+**Timestamps — all stored as UTC, displayed wrong**
+- All conversation SELECT functions in `database.py` now apply `datetime(timestamp, '+3 hours')` so every timestamp the UI receives is already KSA time. Applied to: `get_customer_conversation_history`, `get_team_conversation_history`, `get_admin_conversation`, `get_conversation_thread`, `get_notifications`.
+
+**Message scrambling in all chat windows**
+- Root cause 1: Index-based React keys (`hist_N`, `team_api_N`, `cust_N`) — shift when list grows, React re-assigns DOM nodes.
+- Root cause 2: Team merge used `text+ts` dedup and appended local messages at the end without sorting.
+- Root cause 3: `ts` only stored `HH:MM` — no full timestamp for ordering.
+- Root cause 4: `makeInitialThreads` had `id:1` (number) — exploded `.startsWith()` call.
+- Fix: Added `stableId(direction, timestamp, content)` (djb2 hash → `db_` prefix), `optId()` (`opt_` prefix for local messages), `sortMsgs()`, `dedupMsgs()`. Every message now has a `sortKey` (full ISO timestamp). All merge points sort after merging. Admin history, team conv poll, customer conv poll, and `addMessage` all use stable IDs and sorted state.
+- Secondary fix: `sortKey` format inconsistency — DB produces `'YYYY-MM-DD HH:MM:SS'` (space), optimistic produces `'YYYY-MM-DDTHH:MM:SS.000Z'` (T). Space < T in ASCII so all DB messages sorted before all optimistic messages. Added `normSortKey()` that replaces space with T before comparison.
+
+**Cross-device sync (PWA ↔ Web)**
+- Admin/Donna conversation only loaded once on login, never polled. Messages sent on one device invisible on another until logout/login.
+- Fix: Added 10-second polling `useEffect` for admin conversation using same `stableId` + `dedupMsgs` + `sortMsgs` logic.
+
+**Donna not recognizing logged-in user**
+- Role suffix said "You are assisting [name]" — model read as general context, not "this person is typing to you." Applied to all roles.
+- Fix: Changed to "The person logged in and talking to you right now is [name] (role: [role]). You know exactly who they are. Address them by first name." Applied to all 4 roles (admin, manager, support, viewer).
+
+**Mobile keyboard hides send button**
+- Textarea `fontSize:14` triggered iOS auto-zoom on focus (iOS zooms any input < 16px), scaling the layout and pushing the send button off-screen.
+- Visual Viewport handler ignored `vv.offsetTop` — on iOS the viewport scrolls up when keyboard appears.
+- Fix: `fontSize:16` on textarea. Rewrote handler to set `--vv-height` (vv.height) and `--vv-top` (vv.offsetTop). CSS uses `height: var(--vv-height)` and `transform: translateY(var(--vv-top))`. Added `interactive-widget=resizes-content` to viewport meta for Android Chrome.
+
+**Auto-reply after human releases conversation**
+- When agent released a claimed conversation, Donna did not check if there was an unanswered customer message.
+- Fix: Release endpoint now checks last message direction. If inbound → fires `handle_customer_message` as background task.
+
+### New features
+
+**Delivery receipts in customer chat**
+- `customer_conversations` table: added `delivery_status` column (idempotent ALTER TABLE).
+- `update_delivery_status()` now also updates `customer_conversations` by `wa_message_name` (which stores the wamid for outbound messages).
+- `get_customer_conversation_history` SELECT now includes `delivery_status` and `wa_message_name`.
+- UI: outbound customer messages show `✓` (grey, sent), `✓✓` (grey, delivered), `✓✓` (blue, read).
+
+**Convert to ticket from chat**
+- `POST /api/tickets/draft-from-message`: Claude Haiku extracts suggested title, description, priority from a customer message.
+- `POST /api/tickets/create-from-chat`: creates ERPNext ticket + sends WhatsApp confirmation to customer.
+- UI: ticket icon on every inbound customer message. Click → Donna drafts fields → slide-in panel → agent reviews → Create & Notify.
+
+**Job applicant contact type**
+- Auto-detected from English + Arabic keywords (apply, CV, cooperative training, وظيفة, تقديم, تدريب تعاوني…).
+- When detected: `contact_type` updated to `job_applicant` in contacts table.
+- Donna system prompt variant: redirects to `botsolutions.tech/careers`, lightly asks about role interest.
+- UI: purple 🎓 Job Applicant badge in left sidebar. Prospect contacts get teal badge too.
+- Customer list query changed from `WHERE contact_type='customer'` to `WHERE contact_type NOT IN ('blocked','vendor')` — job applicants and prospects now appear in sidebar.
+
+### OAuth investigation
+- Abdul Malik could not connect Gmail — "Cannot load OAuth" error.
+- Root cause: Google OAuth client in config is **Web Application** type. Device Authorization Flow requires **Desktop app** type. Google returns `{"error":"invalid_client","error_description":"Invalid client type."}`.
+- Resolution: Planned — user needs to create a new Desktop app OAuth credential in Google Cloud Console. Config should use separate `google.device_client_id` / `google.device_client_secret` keys so admin calendar integration is not affected.
+
+### Suggestions log
+- Cleaned old entries — kept only April 28 items (IDs 26–29).
+- #28 (duplicate messages): marked implemented.
+- #29 (mobile keyboard): marked implemented.
+- #26 (read incoming WA from team) and #27 (unstructured EOD capture): still open.
+
+### Commits this session
+```
+8a9066e fix: poll dedup wrong column, NoneType crash, UTC->KSA timestamp display
+24b1fd5 feat: Donna auto-replies after human releases a conversation
+fb22bbf feat: delivery receipts, ticket-from-chat, job applicant type
+d3e6703 fix: eliminate message scrambling with stable IDs, sortKey, and sorted merges
+3b64ff4 fix: crash on m.id.startsWith — welcome messages had numeric id:1
+06c5f31 fix: cross-device sync, sortKey scramble, identity recognition for all users
+e06489d fix: mobile keyboard pushes send button off-screen (#29)
+```
+
+### Service state
+- `cloud_agent.service` — active (running), no errors
+- 21 scheduler jobs active (unchanged)
+
+### What is next
+- [ ] #26 — Read incoming WhatsApp messages from team members
+- [ ] #27 — Capture unstructured EOD submissions from team
+- [ ] Gmail OAuth: create Desktop app credential in Google Cloud Console; update config to use `device_client_id` / `device_client_secret` separate from admin calendar credentials
+- [ ] Quotations tool in ERPNext (suggestion #25, removed from log but still valid)
+- [ ] Scheduled WhatsApp/email reminders (suggestion #16/17)

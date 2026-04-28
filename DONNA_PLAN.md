@@ -516,3 +516,60 @@ CalendarPanel: 14-day event list + create form with Google Meet option.
 
 ## All planned milestones complete ✅
 
+
+## Milestone 12 — Bug fixes, message ordering, mobile, new features (2026-04-28/29)
+
+### 12.1 — Critical poll bug fix ✅ 2026-04-29
+is_customer_message_recently_processed queried non-existent column customer_phone. Fixed to phone_number. Restored entire 5-minute fallback poll path which had been dead since the function was introduced.
+
+### 12.2 — NoneType crash in customer handler ✅ 2026-04-29
+contact name field can be NULL in DB. .get('name', '') returns None when key exists but value is null — default only fires when key is absent. Fixed with: ((contact or {}).get('name') or '').strip()
+
+### 12.3 — UTC to KSA timestamps in all conversation reads ✅ 2026-04-29
+All conversation SELECT functions apply datetime(timestamp, '+3 hours') — customer, team, admin, notifications.
+
+### 12.4 — Auto-reply after human releases conversation ✅ 2026-04-29
+Release endpoint checks last message direction. If inbound, fires handle_customer_message as background task so the customer is never left waiting after handback.
+
+### 12.5 — Delivery receipts in customer chat ✅ 2026-04-29
+delivery_status column added to customer_conversations. update_delivery_status() now covers both team and customer tables. UI shows single grey tick (sent), double grey tick (delivered), double blue tick (read) on outbound messages.
+
+### 12.6 — Convert to ticket from chat ✅ 2026-04-29
+Ticket icon on each inbound customer message. Claude Haiku drafts title/description/priority from the message. Slide-in panel with editable fields. On confirm: creates ERPNext ticket + sends WhatsApp confirmation to customer automatically.
+
+### 12.7 — Job applicant contact type ✅ 2026-04-29
+Auto-detected from English and Arabic keywords (apply, CV, cooperative training, job, career / وظيفة، تقديم، تدريب تعاوني). System prompt variant redirects to botsolutions.tech/careers, lightly asks about role interest. Purple badge in left sidebar. Customer list now includes job_applicant and prospect types (was customer-only).
+
+### 12.8 — Message ordering: stable IDs, sortKey, sorted merges ✅ 2026-04-29
+Replaced all index-based React keys (hist_N, team_api_N, cust_N) with stableId() — djb2 hash of direction+timestamp+content giving permanent db_ prefix. Added optId() for locally-sent optimistic messages (opt_ prefix). Every message carries sortKey (full ISO timestamp). sortMsgs(), dedupMsgs() applied at all merge points. normSortKey() normalises SQLite space format vs ISO T format before string comparison so sort order is always correct.
+
+### 12.9 — Cross-device sync for admin conversation ✅ 2026-04-29
+Admin/Donna thread had no polling — messages sent on PWA were invisible in web and vice versa until logout. Added 10-second polling useEffect using same stableId + dedupMsgs + sortMsgs logic. In-session opt_ messages preserved across merges.
+
+### 12.10 — User identity recognition for all roles ✅ 2026-04-29
+Role suffix rewritten from ambiguous "You are assisting [name]" to explicit "The person logged in and talking to you right now is [name] (role: [role]). You know exactly who they are. Address them by first name." Applied to all 4 roles: admin, manager, support, viewer.
+
+### 12.11 — Mobile keyboard fix ✅ 2026-04-29
+Three compounding causes fixed:
+1. Textarea font-size raised from 14px to 16px — prevents iOS auto-zoom on focus (iOS zooms any input below 16px, scaling the layout and pushing the send button off-screen).
+2. Visual Viewport handler rewritten to set --vv-height (vv.height) and --vv-top (vv.offsetTop). CSS uses height: var(--vv-height) and transform: translateY(var(--vv-top)). Old approach ignored offsetTop, breaking iOS positioning.
+3. Added interactive-widget=resizes-content to viewport meta tag — tells Android Chrome to resize the layout viewport when keyboard appears so 100dvh tracks correctly.
+
+## Planned — Next items
+
+### P1 — Gmail OAuth: Desktop app credential (BLOCKED on Google Cloud Console)
+Current OAuth client in config is Web Application type. Device Authorization Flow requires Desktop app type. Google returns invalid_client / Invalid client type on every attempt.
+Action required: Create new Desktop app OAuth 2.0 credential in Google Cloud Console.
+Code change needed: add google.device_client_id and google.device_client_secret config keys (separate from admin calendar credentials so CalendarPanel is not affected). Update /api/oauth/google/start to use device_client_id.
+
+### P2 — Read incoming WhatsApp from team members (suggestion #26)
+Donna has no visibility into replies from team members via WhatsApp. Incoming team messages are invisible unless Talha manually forwards them. Needed for: EOD collection from non-standard responses, acknowledgement tracking, full two-way team comms visibility.
+
+### P3 — Capture unstructured EOD submissions (suggestion #27)
+EOD collector only triggers on specific keywords/format. Raw paragraph-style updates from team (e.g. Arslan) are missed entirely. Fix: run all team inbound messages through Claude to detect EOD intent regardless of format, then save as EOD report.
+
+### P4 — Quotations tool in ERPNext
+Add get_quotations tool to fetch RFQ/Quotation doctype from ERPNext. Talha has asked multiple times and there is no tool for it.
+
+### P5 — Scheduled WhatsApp/email reminders
+Allow scheduling messages for future delivery (e.g. remind Baraa Monday 10am about EBC appointment). Needs APScheduler one-shot jobs stored in DB so they survive restarts.
