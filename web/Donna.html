@@ -1756,9 +1756,15 @@ function stableId(direction, timestamp, content) {
 function optId() {
   return 'opt_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
-// Sort a message array by sortKey ascending (ISO string or numeric ms string).
+// Sort a message array by sortKey ascending.
+// Normalises SQLite space format ('2026-04-29 10:00:00') and ISO T format
+// ('2026-04-29T10:00:00.000Z') so they compare correctly as strings.
+function normSortKey(sk) { return sk ? sk.replace(' ', 'T') : ''; }
 function sortMsgs(msgs) {
-  return [...msgs].sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+  return [...msgs].sort((a, b) => {
+    const ta = normSortKey(a.sortKey), tb = normSortKey(b.sortKey);
+    return ta < tb ? -1 : ta > tb ? 1 : 0;
+  });
 }
 // Deduplicate a merged message array by id, keeping the last occurrence.
 function dedupMsgs(msgs) {
@@ -1885,6 +1891,29 @@ function App(){
         });
       }
     }).catch(()=>{});
+  },[loggedIn]);
+
+  // Poll admin conversation every 10s for cross-device sync (PWA <-> web)
+  useEffect(()=>{
+    if(!loggedIn) return;
+    const loadAdminHistory=()=>{
+      authFetch('/api/admin/conversation').then(d=>{
+        if(!d||!d.messages) return;
+        const fetched=sortMsgs(d.messages.map(m=>({
+          id:stableId(m.direction, m.timestamp, m.message_content),
+          from:m.direction==='inbound'?'user':'donna',
+          text:m.message_content||'',
+          ts:(m.timestamp||'').slice(11,16),
+          sortKey:m.timestamp||'',
+        })));
+        setThreads(prev=>{
+          const session=(prev.donna||[]).filter(m=>String(m.id).startsWith('opt_'));
+          return {...prev,donna:sortMsgs(dedupMsgs([...fetched,...session]))};
+        });
+      }).catch(()=>{});
+    };
+    const id=setInterval(loadAdminHistory,10000);
+    return ()=>clearInterval(id);
   },[loggedIn]);
 
   // Poll notifications every 30s

@@ -3083,12 +3083,18 @@ async def ask_claude(user_message, bot=None, chat_id=None,
             if sender_role in ("support", "viewer"):
                 _allowed_tools = [t for t in TOOLS if t.get("name") not in _FINANCIAL_TOOLS]
                 _role_suffix = (
-                    "\n\nNote: You are assisting a " + sender_role + " user named " + sender_name + ". "
-                    "Do not share financial data (P&L, invoices, payables) — that requires admin/manager access."
+                    "\n\nThe person logged in and talking to you right now is " + sender_name +
+                    " (role: " + sender_role + "). You know exactly who they are."
+                    " Address them by their first name. If they ask who they are or what their name is, tell them."
+                    " Do not share financial data (P&L, invoices, payables) — that requires admin/manager access."
                 )
             else:
                 _allowed_tools = TOOLS
-                _role_suffix = "\n\nYou are assisting " + sender_name + " (" + sender_role + ")."
+                _role_suffix = (
+                    "\n\nThe person logged in and talking to you right now is " + sender_name +
+                    " (role: " + sender_role + "). You know exactly who they are."
+                    " Address them by their first name. If they ask who they are or what their name is, tell them."
+                )
             response = await _claude_create(
                 model=MODEL,
                 max_tokens=2048,
