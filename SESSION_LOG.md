@@ -1006,3 +1006,54 @@ view_team_chat, send_email_draft
 - [ ] "Ask Donna" private coaching in conversation view
 - [ ] Outbound WhatsApp template selector (closed 24h window)
 - [ ] Contact enrichment from ERPNext Customer doctype
+
+---
+
+## Session: 2026-04-28 (Part 2 — continuation)
+
+### Summary
+Implemented all remaining items from the feature audit list.
+
+### What was done
+
+**cloud_agent.py**
+- `sender_role: str = "admin"` parameter added to `ask_claude()`
+- Role-based tool gating in `ask_claude`: support/viewer roles cannot access `_FINANCIAL_TOOLS` (9 financial tool names excluded from `TOOLS` list passed to Claude)
+- Role-based system prompt suffix: each call to Claude includes the caller's name and role
+- Auto-enrichment after customer AI reply: regex scans last 6 inbound messages for name/company patterns and calls `db.update_contact_enrichment()` if found
+- `_send_claim_handoff_summary(agent_username, phone)`: async helper that sends WhatsApp summary of last 10 messages to the claiming agent when they take over a conversation. Falls back to `CONFIG.team_members` by email match if no `donna_users.whatsapp_number` set
+
+**database.py**
+- `ALTER TABLE donna_users ADD COLUMN whatsapp_number TEXT` migration (runs on startup, idempotent)
+- `set_donna_user_whatsapp(username, whatsapp_number)` function
+
+**web_api.py**
+- `PATCH /api/users/{username}/whatsapp` — set agent's WhatsApp number (self or admin)
+- `sender_role=session.get("role")` wired through `/api/chat` → `ask_claude()`
+- `PATCH /api/customers/{phone_number}/claim` now triggers `_send_claim_handoff_summary` in background task
+
+**web/Donna.html**
+- `OutboundWAComposer`: when 24h window is closed, shows detailed guidance box with "Ask Donna for templates" button that queries `/api/chat` and populates the message field
+- "Ask Donna privately" button in customer conversation input area: collapses inline coaching panel where support agents type a question and get Donna's guidance (not visible to customer)
+- `UserMgmtPanel`: WhatsApp number field appears in edit mode for each user; PATCH `/api/users/{username}/whatsapp` on blur
+
+### Bug fixes this session
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| 1 | cloud_agent.py | `description=f"..."` with literal newline in OOH ticket block | Converted to string concatenation with `\\n` |
+| 2 | cloud_agent.py | Regex `[,.\\n]` had literal newline injected by patch script | Fixed by line-merge script |
+| 3 | cloud_agent.py | `_send_claim_handoff_summary` tried `.get('whatsapp_number')` on donna_users which lacked the column | Added ALTER TABLE migration + config fallback by email match |
+| 4 | web_api.py | Claim endpoint returned before triggering handoff summary | Found and patched correct claim endpoint |
+
+### Commits this session
+*(pending — run git commit after this update)*
+
+### Service state
+- `cloud_agent.service` — active (running), no errors
+- All previous 20 scheduler jobs active
+
+### What is next
+- [ ] Per-user Gmail/calendar OAuth self-service flow (user_integrations table exists, needs OAuth dance + "Connect Gmail" button)
+- [ ] Support agent email workflow: email summaries in web UI + draft reply with approve/reject
+- [ ] Contact name enrichment from ERPNext Customer doctype (nightly sync)
+- [ ] Outbound WhatsApp template selection UI (API call to get approved templates, pick & send)

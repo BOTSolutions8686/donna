@@ -1619,6 +1619,17 @@ def _ensure_donna_users():
         """)
 
 _ensure_donna_users()
+# Upgrade: add whatsapp_number column if missing
+try:
+    with _conn() as _c:
+        _c.execute('ALTER TABLE donna_users ADD COLUMN whatsapp_number TEXT')
+except Exception:
+    pass  # column already exists
+
+
+def set_donna_user_whatsapp(username: str, whatsapp_number):
+    with _conn() as conn:
+        conn.execute('UPDATE donna_users SET whatsapp_number=? WHERE username=?', (whatsapp_number, username))
 
 
 def upsert_donna_user(username: str, display_name: str = None, role: str = None):

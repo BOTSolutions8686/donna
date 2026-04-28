@@ -460,12 +460,32 @@ admin_conversations, push_subscriptions, donna_notifications,
 donna_users, role_permissions, user_integrations, conversation_claims
 ```
 
+## Milestone 9 — Role tools, handoff summary, coaching, enrichment (2026-04-28)
+
+### 9.1 — Role-based tool gating in ask_claude ✅ 2026-04-28
+Support/viewer roles get `TOOLS` minus 9 financial tools. System prompt suffix names the caller and their role.
+
+### 9.2 — sender_role wired through /api/chat ✅ 2026-04-28
+`session.get("role")` passed as `sender_role` to `ask_claude` so web UI chat respects RBAC.
+
+### 9.3 — Customer auto-enrichment ✅ 2026-04-28
+After each AI reply, regex scans inbound messages for name/company patterns and updates `contacts` table via `update_contact_enrichment`.
+
+### 9.4 — Conversation handoff summary ✅ 2026-04-28
+When agent claims a conversation, `_send_claim_handoff_summary` sends last 10 messages to their WhatsApp number.
+
+### 9.5 — donna_users.whatsapp_number ✅ 2026-04-28
+Schema migration adds column. `PATCH /api/users/{username}/whatsapp` lets agents set their own number. UserMgmtPanel shows WA field in edit mode.
+
+### 9.6 — "Ask Donna" private coaching ✅ 2026-04-28
+Support agents can ask Donna for guidance in the customer conversation view. Uses `/api/chat` in background; response visible only to the agent.
+
+### 9.7 — Template guidance in OutboundWAComposer ✅ 2026-04-28
+When 24h window is closed, composer shows guidance box with "Ask Donna for templates" button that queries approved templates via `/api/chat`.
+
 ## Pending / Next
-- [ ] Business hours enforcement: outside hours Donna auto-replies with OOH message + creates ticket
-- [ ] Per-user email/calendar OAuth flow (self-service "Connect Gmail" button)
-- [ ] Per-user email polling (support agents get email summaries + draft reply approval)
-- [ ] Customer profile auto-enrichment (Donna softly collects name/email/company/need)
-- [ ] Role-based Donna system prompt injection (different context per role for web + WA)
-- [ ] "Ask Donna" private coaching in conversation view (support agent asks without customer seeing)
-- [ ] Contact name enrichment from ERPNext Customer doctype (nightly sync)
-- [ ] Outbound WhatsApp template selector (for closed 24h window)
+- [ ] Per-user Gmail/calendar OAuth self-service flow (user_integrations table exists, needs OAuth dance)
+- [ ] Support agent email workflow (email summaries + draft reply approve/reject in web UI)
+- [ ] Contact enrichment from ERPNext Customer doctype (nightly sync)
+- [ ] Full WhatsApp template API integration (list & send approved templates)
+

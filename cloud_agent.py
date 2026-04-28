@@ -3041,7 +3041,8 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None):
 # ── Claude agentic loop ───────────────────────────────────────────────────────
 
 async def ask_claude(user_message, bot=None, chat_id=None,
-                     channel: str = "telegram", sender_name: str = "Talha") -> str:
+                     channel: str = "telegram", sender_name: str = "Talha",
+                     sender_role: str = "admin") -> str:
     # user_message may be a plain string or a list of content blocks (multimodal)
     if isinstance(user_message, list):
         text_for_db = next(
@@ -3073,11 +3074,26 @@ async def ask_claude(user_message, bot=None, chat_id=None,
     response_text = ""
     try:
         for _ in range(6):
+            # Role-based tool access
+            _FINANCIAL_TOOLS = {
+                "get_profit_and_loss", "get_balance_sheet", "get_overdue_invoices",
+                "get_payables_summary", "get_collections_tracker", "get_payment_patterns",
+                "get_daily_financial", "get_sales_summary", "get_gl_summary",
+            }
+            if sender_role in ("support", "viewer"):
+                _allowed_tools = [t for t in TOOLS if t.get("name") not in _FINANCIAL_TOOLS]
+                _role_suffix = (
+                    "\n\nNote: You are assisting a " + sender_role + " user named " + sender_name + ". "
+                    "Do not share financial data (P&L, invoices, payables) — that requires admin/manager access."
+                )
+            else:
+                _allowed_tools = TOOLS
+                _role_suffix = "\n\nYou are assisting " + sender_name + " (" + sender_role + ")."
             response = await _claude_create(
                 model=MODEL,
                 max_tokens=2048,
-                system=SYSTEM_PROMPT + "\n\nCurrent date and time: " + _riyadh_now(),
-                tools=TOOLS,
+                system=SYSTEM_PROMPT + "\n\nCurrent date and time: " + _riyadh_now() + _role_suffix,
+                tools=_allowed_tools,
                 messages=messages,
             )
 
@@ -4009,8 +4025,67 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
 
     _send_customer_reply(sender_number, customer_name, reply, lang)
 
+    # Auto-enrichment: softly extract name/company from conversation
+    try:
+        import re as _re_enrich
+        _history_enrich = db.get_customer_conversation_history(sender_number, limit=6)
+        _full_text = ' '.join(m.get('message_content', '') for m in _history_enrich if m.get('direction') == 'inbound')
+        _name_match = _re_enrich.search(
+            r"(?:i(?:'m| am)|my name is|this is|أنا|اسمي)\s+([A-Za-zأ-ي]{2,20}(?:\s+[A-Za-zأ-ي]{2,20})?)",
+            _full_text, _re_enrich.IGNORECASE
+        )
+        _company_match = _re_enrich.search(
+            r"(?:from|at|with|company[:\s]+|شركة\s+|من شركة)\s+([A-Za-zأ-ي0-9\s&]{2,40}?)(?:[,.]|\Z)",
+            _full_text, _re_enrich.IGNORECASE
+        )
+        _enrich_name = _name_match.group(1).strip() if _name_match else None
+        _enrich_company = _company_match.group(1).strip() if _company_match else None
+        if _enrich_name or _enrich_company:
+            db.update_contact_enrichment(sender_number, _enrich_name, _enrich_company)
+            log.debug("Auto-enriched %s: name=%s company=%s", sender_number, _enrich_name, _enrich_company)
+    except Exception as _enrich_err:
+        log.debug("Auto-enrichment failed for %s: %s", sender_number, _enrich_err)
+
 
 # ── Escalation trigger ────────────────────────────────────────────────────────
+
+async def _send_claim_handoff_summary(agent_username: str, phone: str):
+    """Send a WhatsApp handoff summary to the agent who just claimed a conversation."""
+    try:
+        _agent_info = db.get_donna_user(agent_username)
+        _agent_wa = (_agent_info or {}).get('whatsapp_number') or (_agent_info or {}).get('phone')
+        if not _agent_wa:
+            for _tm in CONFIG.get('team_members', []):
+                if _tm.get('email', '').lower() == agent_username.lower():
+                    _agent_wa = _tm.get('whatsapp')
+                    break
+        if not _agent_wa:
+            log.debug("No WhatsApp for agent %s — skipping handoff summary", agent_username)
+            return
+        contact = db.get_contact(phone) or {}
+        cname = contact.get('name') or phone
+        history = db.get_customer_conversation_history(phone, limit=10)
+        if not history:
+            summary_body = "No previous messages found."
+        else:
+            summary_lines = []
+            for m in history:
+                direction = "-> Customer" if m.get('direction') == 'outbound' else "<- Customer"
+                summary_lines.append(direction + ": " + (m.get('message_content') or '')[:120])
+            summary_body = "\n".join(summary_lines)
+        msg = (
+            "Conversation handoff: " + cname + " (" + phone + ")\n\n"
+            "You have claimed this conversation. Last " + str(len(history)) + " messages:\n\n"
+            + summary_body + "\n\nReply to the customer via the Donna dashboard."
+        )
+        import web_api as _wapi
+        if _wapi._send_whatsapp_fn:
+            await _wapi._send_whatsapp_fn(_agent_wa, msg)
+        else:
+            erp.send_whatsapp(_agent_wa, msg)
+        log.info("Handoff summary sent to %s for customer %s", agent_username, phone)
+    except Exception as _hs_err:
+        log.warning("Failed to send handoff summary: %s", _hs_err)
 
 async def trigger_escalation(phone_number: str, customer_name: str, reason: str,
                               assigned_to: str = None):

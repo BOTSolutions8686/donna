@@ -1210,6 +1210,16 @@ async def set_user_role(username: str, body: UserRoleBody, session=Depends(requi
     return {"ok": True, "username": username, "role": body.role}
 
 
+@app.patch("/api/users/{username}/whatsapp")
+async def update_user_whatsapp_number(username: str, body: dict, session=Depends(require_auth)):
+    """Set a user's WhatsApp number. Users can set their own; admins can set anyone's."""
+    caller = session.get("username", "")
+    if caller != username and session.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    wa = (body.get("whatsapp_number") or "").strip()
+    db.set_donna_user_whatsapp(username, wa or None)
+    return {"ok": True, "username": username, "whatsapp_number": wa or None}
+
 @app.patch("/api/users/{username}/name")
 async def set_user_display_name(username: str, body: UserNameBody, session=Depends(require_admin)):
     db.update_donna_user_name(username, body.display_name)
@@ -1258,10 +1268,12 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
     username = session.get("username", "admin") if isinstance(session, dict) else "admin"
     try:
         _display = _display_name_for(username)
+        _user_role = session.get("role", "support") if isinstance(session, dict) else "support"
         response = await _ask_claude_fn(
             body.message,
             channel="web",
             sender_name=_display,
+            sender_role=_user_role,
         )
         try:
             db.log_admin_message(username, "inbound", body.message)
@@ -1361,6 +1373,14 @@ async def claim_conversation_api(phone_number: str, session=Depends(require_auth
     if not ok:
         existing = db.get_conversation_claim(phone_number)
         raise HTTPException(status_code=409, detail=f"Already claimed by {existing.get('claimed_by_name', existing.get('claimed_by'))}")
+    try:
+        import cloud_agent as _ca_mod
+        import asyncio as _claim_aio
+        _claim_aio.get_event_loop().create_task(
+            _ca_mod._send_claim_handoff_summary(username, phone_number)
+        )
+    except Exception as _hs_err:
+        _log.debug("Handoff summary trigger error: %s", _hs_err)
     return {"ok": True, "phone_number": phone_number, "claimed_by": username, "claimed_by_name": display_name}
 
 
