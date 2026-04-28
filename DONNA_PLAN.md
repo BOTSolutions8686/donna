@@ -331,3 +331,141 @@ Never commit: config.py, cloud_agent.db, logs/, *.bak files.
 - [ ] Verify Abdul Malik messages now route correctly in production
 - [ ] Monitor whatsapp.log for real traffic
 - [ ] Clean up *.bak files after confirming stability
+
+---
+
+## Milestone 8 — RBAC, Dedicated Meta App, Web UI Overhaul (2026-04-28)
+
+### 8.1 — Dedicated Donna Meta App ✅ 2026-04-28
+- Created separate Meta Cloud API app for Donna (App ID: 4557236414522831, v25.0)
+- Updated config.py: new access_token, app_id, api_version v25.0 (phone_id unchanged)
+- Removed ERPNext fan-out from `/whatsapp-incoming` POST handler in web_api.py
+- Donna is now fully independent from ERPNext's Meta app
+- Webhook URL: https://donna.botsolutions.tech/whatsapp-incoming (verify_token: frappewapp)
+- Caddy simplified: all traffic → localhost:8080 (removed special /whatsapp-incoming → 8765 routing)
+
+### 8.2 — Identity Fix ✅ 2026-04-28
+- Root cause: `/api/chat` hardcoded `sender_name="Talha"` for all web chat users
+- Added `_display_name_for(username)` helper: checks donna_users DB → team_members config → email parse
+- Login response now includes `display_name` field
+- Frontend extracts `display_name` from login response, uses it for initials + sidebar display
+- `/api/auth/me` also returns `display_name`
+
+### 8.3 — RBAC: donna_users + User Management ✅ 2026-04-28
+- Added `donna_users` table: id, username, display_name, role, is_active, created_at, last_login
+- `upsert_donna_user()`: called on every login, updates last_login, only upgrades role (never silently downgrades)
+- User management API (admin-only): GET/PATCH role, PATCH name, PATCH deactivate/activate
+- `UserMgmtPanel` React component in Donna.html: grouped by role, inline name editing, role selector, enable/disable toggle
+- "User Management" added to System tools nav
+
+### 8.4 — EOD Schedule Fixed to KSA Times ✅ 2026-04-28
+- Root cause: APScheduler uses `timezone="Asia/Riyadh"` so `hour=` values ARE KSA hours
+- EOD request: 13:45 → **16:30 KSA** (`hour=16, minute=30`)
+- EOD summary: 15:30 → **16:55 KSA** (`hour=16, minute=55`)
+- Server timezone: confirmed `Asia/Riyadh` via `timedatectl`
+- Docstrings and startup log updated to reflect correct times
+
+### 8.5 — Role System Overhaul (3 roles) ✅ 2026-04-28
+- Roles: **admin** (full), **manager** (reports + customers, no settings/P&L), **support** (tickets + WA + customers)
+- Role `agent` renamed to `support` throughout all code and DB
+- `role_permissions` table: 15 permission flags seeded per role with correct defaults:
+  - admin: all 15 permissions
+  - manager: all except manage_users, manage_roles, manage_settings, view_financials
+  - support: view/chat customers, send_whatsapp, claim_conversation, escalate_tickets, view_team_chat, view_email, send_email_draft
+  - viewer: view_customers, view_reports only
+- `db.has_permission(username, permission)` — checks via role_permissions table
+- `db.get_role_permissions(role)` / `db.get_all_role_permissions()` — full matrix access
+- `db.set_role_permission(role, permission, granted)` — toggle individual flag
+
+### 8.6 — Dynamic Role Permissions Web UI ✅ 2026-04-28
+- `RolePermissionsPanel` React component: admin-only, shows all 15 permissions as rows
+- 3-column toggle switches for manager/support/viewer (admin always full, not editable)
+- GET /api/permissions — returns full matrix + labels
+- PATCH /api/permissions — toggle one flag (admin role protected from changes)
+- "Role Permissions" added to System tools nav
+- Financial tools section: changed from adminOnly → managerOnly (admin + manager)
+- P&L Overview API endpoint: now requires admin auth
+- TOOLS filter: handles both adminOnly and managerOnly section flags
+
+### 8.7 — User Pre-creation + Improved User Management ✅ 2026-04-28
+- POST /api/users — pre-create user before first login (no ERPNext account needed yet)
+- "Add User" form in UserMgmtPanel: username/email, display name, role selector
+- Login: looks up DB role BEFORE creating session — manager/support/viewer stored correctly
+- Session role = actual DB role (not generic 'team')
+- Session TTL extended: 24h → 7 days
+- Fetch permissions from /api/auth/permissions after login; stored in loggedIn state
+
+### 8.8 — Conversation Claiming ✅ 2026-04-28
+- `conversation_claims` table: phone_number (PK), claimed_by, claimed_by_name, claimed_at, active
+- `db.claim_conversation(phone, username, display_name)` — returns False if already claimed by someone else
+- `db.release_conversation(phone, username)` — clears claim, un-pauses Donna
+- When claimed: `donna_paused=1` set on contacts row, Donna logs inbound messages but sends no AI response
+- POST /api/customers/{phone}/claim — requires `claim_conversation` permission
+- POST /api/customers/{phone}/release — claimer or admin only
+- GET /api/conversations/claims — all active claims
+- `ClaimButton` React component in conversation header: shows claim/release UI with attribution
+- Claimed conversations shown as amber in sidebar (was green)
+- CustomerCard shows claimer name badge in sidebar list
+
+### 8.9 — Outbound WhatsApp Composer ✅ 2026-04-28
+- POST /api/whatsapp/send — send to any phone number (requires send_whatsapp permission)
+- GET /api/whatsapp/check-window/{phone} — checks if 24h free-text window is open
+- `OutboundWAComposer` React modal: phone input with 24h window indicator, message textarea, char counter
+- "+ New" button in customers sidebar opens composer
+- `register_send_whatsapp(fn)` in web_api.py — wired to `_send_customer_reply` via post_init
+
+### 8.10 — Contact Enrichment ✅ 2026-04-28
+- contacts table: added status, email, need_category, enriched_name, enriched_at, donna_paused, ticket_count
+- `db.update_contact_enrichment(phone, **kwargs)` — update name/email/company/need_category/status
+- PATCH /api/customers/{phone}/enrich — REST endpoint for manual enrichment from web UI
+- GET /api/customers now includes claimed_by/claimed_by_name per contact
+
+### 8.11 — EOD Summary for Managers ✅ 2026-04-28
+- `job_eod_summary` now looks up all donna_users with role='manager' and sends them the EOD digest
+- Matches manager email against team_members config to find WhatsApp number
+- Haider (manager role) gets same full team EOD summary as Talha at 4:55 PM KSA
+
+### 8.12 — Business Hours Helper ✅ 2026-04-28
+- `_is_business_hours()` — True if KSA time is Sun–Thu 10am–5pm (Fri/Sat off)
+- `_business_hours_message(lang)` — OOH message in English or Arabic
+- Ready for use in customer message handler (not yet enforced automatically)
+
+### 8.13 — Bug Fixes (code review) ✅ 2026-04-28
+- **`_dispatch_inbound_whatsapp`**: whitelist is `[{number, name, ...}]` not strings — `set()` was crashing with `TypeError: unhashable type: 'dict'`. Fixed with set comprehension extracting `w["number"]`
+- **`_dispatch_inbound_whatsapp`**: called `_process_whatsapp_message(phone, text, msg_id, sender_name)` with wrong arg order — function takes `(sender, sender_name, message)`. Fixed
+- **`_fastapi_wa_dispatch`**: called nonexistent `_handle_delivery_status(phone, status)`. Replaced with inline `db.update_delivery_status(wamid, dst)` using correct `id` field
+- **`upsert_donna_user`**: role upgrade check missed 'support' role. Fixed to include 'support' alongside 'agent'
+- **Default role**: all three places (`CREATE TABLE`, `INSERT`, `create_session`) defaulting to 'agent' → changed to 'support'
+- **Login role**: was storing generic 'team' in session. Now looks up DB role first — manager/support/viewer stored correctly in session
+- **`get_customers` claim lookup**: claimed conversations now show amber status in sidebar
+
+## Current Scheduler
+```
+zatca(30min) | daily_summary(9am) | gl_snapshot(midnight) | health_check(6am)
+collections_escalation(mon 8am) | suggestions_digest(mon 8:15am) | team_reminders(9:30am daily)
+team_accountability(mon 8:30am) | monthly_pl(1st 9am) | refresh_coa(sun 11pm)
+whatsapp_poll(5min-fallback) | email_check(30min) | delivery_check(10min) | takeover_expiry(30min)
+sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am)
+escalation_check(5min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA)
+```
+
+## Current Database Tables
+```
+gl_snapshots, zatca_alerts, conversation_history, scheduled_runs, daily_snapshots,
+communication_log, suggestions, collections_tracker, chart_of_accounts,
+team_interactions, ticket_assignments, team_pending_state, team_conversations,
+daily_reports, eod_session_state, contacts, customer_conversations,
+customer_escalations, sessions, whatsapp_conversations, processed_emails,
+admin_conversations, push_subscriptions, donna_notifications,
+donna_users, role_permissions, user_integrations, conversation_claims
+```
+
+## Pending / Next
+- [ ] Business hours enforcement: outside hours Donna auto-replies with OOH message + creates ticket
+- [ ] Per-user email/calendar OAuth flow (self-service "Connect Gmail" button)
+- [ ] Per-user email polling (support agents get email summaries + draft reply approval)
+- [ ] Customer profile auto-enrichment (Donna softly collects name/email/company/need)
+- [ ] Role-based Donna system prompt injection (different context per role for web + WA)
+- [ ] "Ask Donna" private coaching in conversation view (support agent asks without customer seeing)
+- [ ] Contact name enrichment from ERPNext Customer doctype (nightly sync)
+- [ ] Outbound WhatsApp template selector (for closed 24h window)
