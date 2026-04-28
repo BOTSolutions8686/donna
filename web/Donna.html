@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover,interactive-widget=resizes-content"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
@@ -143,8 +143,14 @@ input,textarea{font-family:var(--sans);}
   /* Header */
   .app-header{padding:0 10px;}
 
-  /* Keyboard-aware layout: shrink shell by keyboard offset */
-  .app-shell{height:calc(100dvh - var(--keyboard-offset,0px));transition:height 0.1s ease;}
+  /* Keyboard-aware layout: driven directly from Visual Viewport API */
+  /* --vv-height = visualViewport.height (excludes keyboard) */
+  /* --vv-top    = visualViewport.offsetTop (iOS scroll offset when keyboard opens) */
+  .app-shell{
+    height:var(--vv-height,100dvh);
+    transform:translateY(var(--vv-top,0px));
+    transition:height 0.05s linear,transform 0.05s linear;
+  }
 
   /* Bigger tap targets on nav buttons */
   .mob-nav{height:60px;}
@@ -1821,14 +1827,17 @@ function App(){
     _mq.addEventListener('change',h);
     // Track virtual keyboard offset for input positioning
     const vvh=()=>{
-      if(window.visualViewport){
-        const offset=window.innerHeight-window.visualViewport.height;
-        document.documentElement.style.setProperty('--keyboard-offset',offset+'px');
-      }
+      const vv=window.visualViewport;
+      if(!vv) return;
+      // Set shell height = visual viewport height (keyboard excluded)
+      document.documentElement.style.setProperty('--vv-height',Math.round(vv.height)+'px');
+      // On iOS the viewport scrolls up when keyboard appears; translateY corrects position
+      document.documentElement.style.setProperty('--vv-top',Math.round(vv.offsetTop)+'px');
     };
     if(window.visualViewport){
       window.visualViewport.addEventListener('resize',vvh);
       window.visualViewport.addEventListener('scroll',vvh);
+      vvh(); // set immediately on mount
     }
     return ()=>{
       _mq.removeEventListener('change',h);
@@ -2453,7 +2462,7 @@ function App(){
                   onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}}}
                   placeholder={isCustomerThread&&intervening?`Reply to ${activeCustomer?.name}...`:'Ask Donna anything...'}
                   rows={1}
-                  style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,padding:'11px 14px',color:'var(--text-1)',fontSize:14,resize:'none',outline:'none',lineHeight:1.5,fontFamily:'var(--sans)',transition:'border-color 0.15s'}}
+                  style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,padding:'11px 14px',color:'var(--text-1)',fontSize:16,resize:'none',outline:'none',lineHeight:1.5,fontFamily:'var(--sans)',transition:'border-color 0.15s'}}
                   onFocus={e=>e.target.style.borderColor='var(--teal)'}
                   onBlur={e=>e.target.style.borderColor='var(--border)'}/>
                 <button onClick={handleSend} style={{width:40,height:40,borderRadius:9,background:intervening?'var(--amber)':'var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,opacity:input.trim()?1:0.5,transition:'opacity 0.15s',border:'none',cursor:'pointer'}}>
