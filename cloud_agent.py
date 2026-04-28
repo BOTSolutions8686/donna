@@ -3353,6 +3353,37 @@ async def _finalize_eod_report(sender_number: str, sender_name: str, transcript:
     log.info('EOD report saved for %s on %s', sender_name, today)
 
 
+async def job_enrich_contacts_from_erp(app):
+    """Nightly (2am KSA) — pull ERPNext Contact records and enrich local contacts table."""
+    try:
+        erp_contacts = erp.get_list(
+            "Contact",
+            fields=["full_name", "email_id", "mobile_no", "phone", "company_name"],
+            limit=500,
+        )
+        enriched = 0
+        for ec in (erp_contacts or []):
+            phone_raw = (ec.get("mobile_no") or ec.get("phone") or "").strip()
+            if not phone_raw:
+                continue
+            phone = phone_raw if phone_raw.startswith("+") else "+" + phone_raw.lstrip("0")
+            name = (ec.get("full_name") or "").strip() or None
+            email = (ec.get("email_id") or "").strip() or None
+            company = (ec.get("company_name") or "").strip() or None
+            existing = db.get_contact(phone)
+            if existing:
+                db.update_contact_enrichment(
+                    phone,
+                    name=name or existing.get("name"),
+                    email=email or existing.get("email"),
+                    company=company or existing.get("company"),
+                )
+                enriched += 1
+        log.info("ERPNext contact sync: enriched %d contacts", enriched)
+    except Exception as _ee:
+        log.warning("ERPNext contact sync failed: %s", _ee)
+
+
 async def job_eod_report_request(app):
     """16:30 KSA — Ask all team members for their EOD update."""
     members = CONFIG.get('team_members', [])
@@ -6271,6 +6302,11 @@ def main():
             lambda: _run(lambda: job_eod_summary(app)),
             "cron", hour=16, minute=55, id="eod_summary",
         )
+        scheduler.add_job(
+            lambda: _run(lambda: job_enrich_contacts_from_erp(app)),
+            "cron", hour=2, minute=0, id="erp_contact_sync",
+            timezone="Asia/Riyadh",
+        )
         # ── Donna web dashboard ──────────────────────────────────────────────────
         web_api.set_ask_claude(ask_claude)
         web_api.set_send_push(send_push_notification)
@@ -6286,7 +6322,7 @@ def main():
             "team_reminders(9:30am daily) | team_accountability(mon 8:30am) | "
             "monthly_pl(1st 9am) | refresh_coa(sun 11pm) | "
             "whatsapp_poll(5min-fallback) | email_check(30min) | delivery_check(10min) | takeover_expiry(30min) | "
-            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA)"
+            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA) | erp_contact_sync(2am)"
         )
 
     async def post_shutdown(app):

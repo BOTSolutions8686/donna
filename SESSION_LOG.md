@@ -1057,3 +1057,46 @@ Implemented all remaining items from the feature audit list.
 - [ ] Support agent email workflow: email summaries in web UI + draft reply with approve/reject
 - [ ] Contact name enrichment from ERPNext Customer doctype (nightly sync)
 - [ ] Outbound WhatsApp template selection UI (API call to get approved templates, pick & send)
+
+---
+
+## Session: 2026-04-28 (Part 3 — remaining features)
+
+### Summary
+Implemented all four remaining features from the audit list.
+
+### What was done
+
+**cloud_agent.py**
+- `job_enrich_contacts_from_erp`: nightly (2am KSA) job fetches ERPNext Contact records and enriches local contacts table with full_name, email_id, company_name. Runs via APScheduler cron registered in `post_init`.
+
+**web_api.py**
+- `GET /api/whatsapp/templates` — calls `erp.get_whatsapp_templates()` and returns approved Meta templates
+- `GET /api/oauth/google/start` — starts Google Device Authorization Flow; returns device_code, user_code, verification_url for the user to open on their phone
+- `POST /api/oauth/google/poll` — polls token endpoint until user approves; on success fetches Gmail email address and saves to `user_integrations` table
+- `DELETE /api/oauth/google` — disconnects (removes from user_integrations)
+- `GET /api/oauth/status` — returns which integrations the current user has connected
+- `GET /api/email/inbox` — fetches user's unread Gmail messages using their stored per-user credentials
+- `POST /api/email/draft` — asks Donna to draft a reply to a given email (sends prompt to Claude)
+- `POST /api/email/send` — sends an approved draft via the user's connected Gmail account
+
+**web/Donna.html**
+- `GmailConnectModal`: device flow UI — shows user_code + verification_url, polls until connected
+- `EmailInboxPanel`: two-pane panel — left: unread email list; right: Donna's draft reply with Approve & Send button. Includes Connect Gmail prompt if not yet connected.
+- `OutboundWAComposer`: when 24h window is closed, now shows real approved template list from `/api/whatsapp/templates`. Click to select, send button becomes "Send template: name"
+- 'My Email Inbox' added to Communication nav section
+
+### What was done (ERPNext contact sync)
+- Nightly `erp_contact_sync` cron at 2am KSA pulls all Contact records with mobile_no/phone, enriches local contacts table. 21st scheduler job.
+
+### Commits this session
+*(pending)*
+
+### Service state
+- `cloud_agent.service` — active, 21 scheduler jobs
+- All new endpoints active on port 8080
+
+### What is next
+- [ ] Per-user Google Calendar integration (OAuth done, but no calendar-specific UI)
+- [ ] Template parameter input UI (allow filling in {{1}} {{2}} placeholders before sending)
+- [ ] Support agent notification: when new email arrives in their connected inbox (push or WhatsApp)

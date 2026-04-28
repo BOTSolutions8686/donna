@@ -483,9 +483,26 @@ Support agents can ask Donna for guidance in the customer conversation view. Use
 ### 9.7 — Template guidance in OutboundWAComposer ✅ 2026-04-28
 When 24h window is closed, composer shows guidance box with "Ask Donna for templates" button that queries approved templates via `/api/chat`.
 
+## Milestone 10 — Gmail OAuth, email workflow, WA templates, ERPNext sync (2026-04-28)
+
+### 10.1 — ERPNext Contact enrichment nightly sync ✅ 2026-04-28
+`job_enrich_contacts_from_erp` runs at 2am KSA. Pulls Contact doctype (full_name, email_id, company_name, mobile_no) and updates local contacts table.
+
+### 10.2 — WhatsApp template API endpoint ✅ 2026-04-28
+`GET /api/whatsapp/templates` returns approved Meta templates. OutboundWAComposer now shows real template picker when 24h window is closed.
+
+### 10.3 — Per-user Gmail OAuth (Device Authorization Flow) ✅ 2026-04-28
+`GET /api/oauth/google/start` → `POST /api/oauth/google/poll` → token saved to user_integrations.
+GmailConnectModal in web UI guides user through the device flow with user_code display.
+
+### 10.4 — Support agent email inbox + draft workflow ✅ 2026-04-28
+`GET /api/email/inbox` fetches unread emails via per-user Gmail credentials.
+`POST /api/email/draft` asks Claude to draft a reply.
+`POST /api/email/send` sends the approved draft via user's Gmail.
+EmailInboxPanel in web UI: two-pane layout, select email → Donna drafts → approve → send.
+
 ## Pending / Next
-- [ ] Per-user Gmail/calendar OAuth self-service flow (user_integrations table exists, needs OAuth dance)
-- [ ] Support agent email workflow (email summaries + draft reply approve/reject in web UI)
-- [ ] Contact enrichment from ERPNext Customer doctype (nightly sync)
-- [ ] Full WhatsApp template API integration (list & send approved templates)
+- [ ] Template parameter input UI (for templates with {{1}} {{2}} placeholders)
+- [ ] Per-user email arrival push notifications
+- [ ] Google Calendar integration UI (view/create events from web UI)
 

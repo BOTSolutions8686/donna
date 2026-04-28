@@ -213,6 +213,7 @@ const TOOLS=[
   {section:'Communication',items:[
     {id:'send_whatsapp',label:'Send WhatsApp'},
     {id:'send_email',   label:'Send Email'},
+    {id:'my_email',     label:'My Email Inbox'},
   ]},
   {section:'System',adminOnly:true,items:[
     {id:'donna_suggestions',label:'Suggestions Log'},
@@ -725,6 +726,13 @@ function OutboundWAComposer({onClose,onSent}){
   const [checking,setChecking]=React.useState(false);
   const [sending,setSending]=React.useState(false);
   const [error,setError]=React.useState('');
+  const [templates,setTemplates]=React.useState(null);
+  const [selectedTemplate,setSelectedTemplate]=React.useState(null);
+  const [templateParams,setTemplateParams]=React.useState([]);
+
+  React.useEffect(()=>{
+    authFetch('/api/whatsapp/templates').then(d=>{if(d)setTemplates(d.templates||[]);});
+  },[]);
 
   const checkWindow=async(num)=>{
     if(!num||num.length<7) return;
@@ -735,11 +743,21 @@ function OutboundWAComposer({onClose,onSent}){
   };
 
   const send=async()=>{
-    if(!phone.trim()||!message.trim()){setError('Phone and message required');return;}
+    const usingTemplate=windowOpen===false&&selectedTemplate;
+    if(!phone.trim()){setError('Phone number required');return;}
+    if(!usingTemplate&&!message.trim()){setError('Message required (or select a template for closed windows)');return;}
+    if(windowOpen===false&&!usingTemplate){setError('Window closed — you must select a template');return;}
     setSending(true);setError('');
+    const payload={phone_number:phone.trim()};
+    if(usingTemplate){
+      payload.template_name=selectedTemplate;
+      payload.template_params=templateParams;
+    } else {
+      payload.message=message.trim();
+    }
     const d=await authFetch('/api/whatsapp/send',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({phone_number:phone.trim(),message:message.trim()})
+      body:JSON.stringify(payload)
     });
     setSending(false);
     if(d&&d.ok){onSent&&onSent(phone.trim());onClose();}
@@ -765,26 +783,19 @@ function OutboundWAComposer({onClose,onSent}){
             : windowOpen
               ? <span style={{fontSize:10,color:'var(--teal)'}}>&#10003; 24h window open — free text allowed</span>
               : <div style={{background:'var(--amber-dim)',border:'1px solid rgba(245,166,35,0.3)',borderRadius:6,padding:'8px 10px',fontSize:11}}>
-                  <div style={{color:'var(--amber)',fontWeight:600,marginBottom:4}}>&#9888; 24h window closed</div>
-                  <div style={{color:'var(--text-2)',lineHeight:1.6}}>
-                    Free-form messages can only be sent within 24h of the customer&#39;s last message.
-                    To reach this contact you need a <strong>WhatsApp Template Message</strong>.
-                  </div>
-                  <div style={{marginTop:6,display:'flex',gap:6}}>
-                    <button onClick={async()=>{
-                      setMessage('');
-                      const d=await authFetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-                        body:JSON.stringify({message:'List all approved WhatsApp message templates we can use for outreach. Format as a numbered list with the template name and a short description.'})
-                      }).catch(()=>null);
-                      if(d&&d.response) setMessage('[TEMPLATE NEEDED]
-
-Ask Donna for help:
-'+d.response.slice(0,600));
-                    }} style={{fontSize:10,padding:'3px 8px',background:'var(--amber)',color:'#000',border:'none',borderRadius:4,cursor:'pointer',fontWeight:600}}>
-                      Ask Donna for templates
-                    </button>
-                    <span style={{fontSize:10,color:'var(--text-3)',alignSelf:'center'}}>or wait for customer to reply first</span>
-                  </div>
+                  <div style={{color:'var(--amber)',fontWeight:600,marginBottom:4}}>&#9888; 24h window closed &#8212; template required</div>
+                  {templates===null
+                    ? <div style={{color:'var(--text-3)'}}>Loading templates&#8230;</div>
+                    : templates.length===0
+                      ? <div style={{color:'var(--text-2)'}}>No approved templates. Approve in Meta Business Manager first.</div>
+                      : <div>
+                          <div style={{color:'var(--text-2)',marginBottom:6}}>Choose a template:</div>
+                          <div style={{display:'flex',flexDirection:'column',gap:4,maxHeight:150,overflowY:'auto'}}>
+                            {templates.map(t=><button key={t.template_name} onClick={()=>{setSelectedTemplate(t.template_name);setTemplateParams([]);}} style={{textAlign:'left',padding:'5px 8px',borderRadius:5,border:'1px solid',borderColor:selectedTemplate===t.template_name?'var(--teal)':'var(--border)',background:selectedTemplate===t.template_name?'var(--teal-dim)':'var(--bg2)',color:'var(--text-1)',cursor:'pointer',fontSize:11,marginBottom:2}}><strong>{t.template_name}</strong><span style={{color:'var(--text-3)',marginLeft:6,fontSize:9}}>{t.language}</span></button>)}
+                          </div>
+                          {selectedTemplate&&<div style={{marginTop:6,fontSize:10,color:'var(--teal)'}}>Selected: {selectedTemplate}</div>}
+                        </div>
+                  }
                 </div>
           }
         </div>}
@@ -801,7 +812,7 @@ Ask Donna for help:
         <button onClick={onClose} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'6px 16px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
         <button onClick={send} disabled={sending||!message.trim()||!phone.trim()}
           style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'6px 16px',fontSize:12,fontWeight:600,cursor:'pointer',opacity:(sending||!message.trim()||!phone.trim())?0.5:1}}>
-          {sending?'Sending…':'Send via WhatsApp'}
+          {sending?'Sending…':windowOpen===false&&selectedTemplate?`Send template: ${selectedTemplate}`:'Send via WhatsApp'}
         </button>
       </div>
     </div>
@@ -870,6 +881,219 @@ function RolePermissionsPanel({onClose}){
         })}
       </div>)}
     </div>}
+  </div>;
+}
+
+
+function GmailConnectModal({onClose,onConnected}){
+  const [step,setStep]=React.useState('idle'); // idle|loading|waiting|done|error
+  const [info,setInfo]=React.useState(null);
+  const [error,setError]=React.useState('');
+  const [polling,setPolling]=React.useState(false);
+
+  const start=async()=>{
+    setStep('loading');setError('');
+    const d=await authFetch('/api/oauth/google/start').catch(()=>null);
+    if(!d||d.detail){setError(d?.detail||'Failed to start OAuth');setStep('error');return;}
+    setInfo(d);setStep('waiting');
+    // Start polling
+    setPolling(true);
+  };
+
+  React.useEffect(()=>{
+    if(!polling||!info) return;
+    let stopped=false;
+    const poll=async()=>{
+      while(!stopped){
+        await new Promise(r=>setTimeout(r,(info.interval||5)*1000));
+        const d=await authFetch('/api/oauth/google/poll',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({device_code:info.device_code})
+        }).catch(()=>null);
+        if(!d) continue;
+        if(d.status==='connected'){setStep('done');onConnected&&onConnected(d.email);stopped=true;return;}
+        if(d.status==='error'){setError(d.detail||'Auth error');setStep('error');stopped=true;return;}
+      }
+    };
+    poll();
+    return ()=>{stopped=true;};
+  },[polling,info]);
+
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:600,display:'flex',alignItems:'center',justifyContent:'center'}}>
+    <div style={{background:'var(--bg1)',borderRadius:12,padding:24,width:400,maxWidth:'90vw',display:'flex',flexDirection:'column',gap:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Connect Gmail</div>
+        <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18}}>&#x2715;</button>
+      </div>
+      {step==='idle'&&<div>
+        <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6,marginBottom:12}}>
+          Connect your Gmail account to receive email summaries and draft replies directly in Donna.
+        </div>
+        <button onClick={start} style={{width:'100%',background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'10px',fontSize:13,fontWeight:600,cursor:'pointer'}}>
+          Connect Gmail Account
+        </button>
+      </div>}
+      {step==='loading'&&<div style={{textAlign:'center',color:'var(--text-3)',fontSize:13}}>Starting authentication&#8230;</div>}
+      {step==='waiting'&&info&&<div>
+        <div style={{fontSize:12,color:'var(--text-2)',marginBottom:10,lineHeight:1.6}}>
+          Open this URL on your phone and enter the code below:
+        </div>
+        <div style={{background:'var(--bg2)',borderRadius:8,padding:12,textAlign:'center',marginBottom:10}}>
+          <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>URL</div>
+          <div style={{fontSize:13,color:'var(--teal)',wordBreak:'break-all'}}>{info.verification_url}</div>
+        </div>
+        <div style={{background:'var(--bg2)',borderRadius:8,padding:12,textAlign:'center',marginBottom:10}}>
+          <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>Enter this code</div>
+          <div style={{fontSize:24,fontWeight:700,letterSpacing:'0.15em',color:'var(--text-1)',fontFamily:'monospace'}}>{info.user_code}</div>
+        </div>
+        <div style={{fontSize:11,color:'var(--text-3)',textAlign:'center'}}>Waiting for authorisation&#8230;</div>
+      </div>}
+      {step==='done'&&<div style={{textAlign:'center'}}>
+        <div style={{fontSize:28,marginBottom:8}}>&#10003;</div>
+        <div style={{fontSize:14,fontWeight:600,color:'var(--teal)',marginBottom:4}}>Gmail Connected!</div>
+        <button onClick={onClose} style={{marginTop:8,background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'8px 20px',fontSize:12,fontWeight:600,cursor:'pointer'}}>Done</button>
+      </div>}
+      {step==='error'&&<div>
+        <div style={{color:'var(--red)',fontSize:12,marginBottom:8}}>{error}</div>
+        <button onClick={()=>setStep('idle')} style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'6px 14px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Try again</button>
+      </div>}
+    </div>
+  </div>;
+}
+
+function EmailInboxPanel({onClose,loggedIn}){
+  const [emails,setEmails]=React.useState(null);
+  const [connected,setConnected]=React.useState(null);
+  const [showConnect,setShowConnect]=React.useState(false);
+  const [selectedEmail,setSelectedEmail]=React.useState(null);
+  const [draft,setDraft]=React.useState('');
+  const [draftLoading,setDraftLoading]=React.useState(false);
+  const [sending,setSending]=React.useState(false);
+  const [sentOk,setSentOk]=React.useState(false);
+
+  const loadStatus=()=>{
+    authFetch('/api/oauth/status').then(d=>{
+      if(d) setConnected((d.integrations||[]).find(i=>i.integration==='gmail')||false);
+    });
+  };
+  const loadInbox=()=>{
+    authFetch('/api/email/inbox?limit=20').then(d=>{
+      if(d) setEmails(d.emails||[]);
+    });
+  };
+  React.useEffect(()=>{loadStatus();},[]);
+  React.useEffect(()=>{if(connected)loadInbox();},[connected]);
+
+  const getDraft=async(email)=>{
+    setSelectedEmail(email);setDraft('');setSentOk(false);
+    setDraftLoading(true);
+    const d=await authFetch('/api/email/draft',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message_id:email.message_id,thread_id:email.thread_id,
+        from_addr:email.from,subject:email.subject,snippet:email.snippet})
+    }).catch(()=>null);
+    setDraftLoading(false);
+    if(d&&d.draft) setDraft(d.draft);
+  };
+
+  const sendDraft=async()=>{
+    if(!selectedEmail||!draft.trim()) return;
+    setSending(true);
+    const d=await authFetch('/api/email/send',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({thread_id:selectedEmail.thread_id,to:selectedEmail.from,
+        subject:'Re: '+selectedEmail.subject.replace(/^Re: /i,''),body:draft})
+    }).catch(()=>null);
+    setSending(false);
+    if(d&&d.ok){setSentOk(true);setSelectedEmail(null);loadInbox();}
+  };
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:520,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  return <div style={panelStyle}>
+    {showConnect&&<GmailConnectModal onClose={()=>setShowConnect(false)} onConnected={()=>{setShowConnect(false);loadStatus();}}/>}
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>My Email Inbox</div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>&#x2715;</button>
+    </div>
+    {connected===null
+      ? <div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>Loading&#8230;</div>
+      : !connected
+        ? <div style={{padding:32,textAlign:'center',display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
+            <div style={{fontSize:13,color:'var(--text-2)',lineHeight:1.7}}>
+              Connect your Gmail account to see your email inbox here and let Donna draft replies for you.
+            </div>
+            <button onClick={()=>setShowConnect(true)} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'10px 20px',fontSize:13,fontWeight:600,cursor:'pointer'}}>
+              Connect Gmail
+            </button>
+          </div>
+        : <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+            {/* Email list */}
+            <div style={{width:220,borderRight:'1px solid var(--border)',overflowY:'auto',flexShrink:0}}>
+              <div style={{padding:'8px 12px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:10,color:'var(--text-3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                  {connected.email_address||'Inbox'}
+                </span>
+                <button onClick={loadInbox} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:10}}>&#8635;</button>
+              </div>
+              {emails===null
+                ? <div style={{padding:20,textAlign:'center',color:'var(--text-3)',fontSize:12}}>Loading&#8230;</div>
+                : emails.length===0
+                  ? <div style={{padding:20,textAlign:'center',color:'var(--text-3)',fontSize:12}}>No unread emails</div>
+                  : emails.map(e=><div key={e.message_id} onClick={()=>getDraft(e)}
+                      style={{padding:'10px 12px',borderBottom:'1px solid var(--border)',cursor:'pointer',
+                        background:selectedEmail?.message_id===e.message_id?'var(--bg2)':'transparent'}}>
+                      <div style={{fontSize:11,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.from.split('<')[0].trim()||e.from}</div>
+                      <div style={{fontSize:10,color:'var(--text-2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:1}}>{e.subject}</div>
+                      <div style={{fontSize:9,color:'var(--text-3)',marginTop:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.snippet}</div>
+                    </div>)
+              }
+              <div style={{padding:'10px 12px',borderTop:'1px solid var(--border)'}}>
+                <button onClick={()=>setShowConnect(true)} style={{fontSize:10,color:'var(--text-3)',background:'none',border:'none',cursor:'pointer',textDecoration:'underline'}}>
+                  Disconnect Gmail
+                </button>
+              </div>
+            </div>
+            {/* Draft panel */}
+            <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+              {!selectedEmail
+                ? <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text-3)',fontSize:12,flexDirection:'column',gap:8}}>
+                    <div>Select an email to draft a reply</div>
+                    {sentOk&&<div style={{color:'var(--teal)',fontSize:11}}>&#10003; Email sent!</div>}
+                  </div>
+                : <div style={{flex:1,display:'flex',flexDirection:'column',padding:12,gap:8,overflow:'hidden'}}>
+                    <div style={{background:'var(--bg0)',borderRadius:7,padding:'8px 10px',fontSize:11}}>
+                      <div style={{fontWeight:600,color:'var(--text-1)',marginBottom:2}}>{selectedEmail.subject}</div>
+                      <div style={{color:'var(--text-3)'}}>{selectedEmail.from}</div>
+                      <div style={{color:'var(--text-2)',marginTop:4,lineHeight:1.6}}>{selectedEmail.snippet}</div>
+                    </div>
+                    <div style={{fontSize:10,color:'var(--text-3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                      Donna&#39;s draft reply:
+                    </div>
+                    {draftLoading
+                      ? <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--text-3)',fontSize:12}}>Generating draft&#8230;</div>
+                      : <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={8}
+                          style={{flex:1,background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:7,
+                            padding:'8px 10px',color:'var(--text-1)',fontSize:12,resize:'none',outline:'none',
+                            lineHeight:1.6,fontFamily:'var(--sans)'}}/>
+                    }
+                    <div style={{display:'flex',gap:8,justifyContent:'flex-end',flexShrink:0}}>
+                      <button onClick={()=>setSelectedEmail(null)} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'6px 14px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>
+                        Cancel
+                      </button>
+                      <button onClick={sendDraft} disabled={sending||!draft.trim()||draftLoading}
+                        style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'6px 16px',fontSize:12,fontWeight:600,cursor:'pointer',
+                          opacity:sending||!draft.trim()||draftLoading?0.5:1}}>
+                        {sending?'Sending&#8230;':'Approve &amp; Send'}
+                      </button>
+                    </div>
+                  </div>
+              }
+            </div>
+          </div>
+    }
   </div>;
 }
 
@@ -1363,6 +1587,8 @@ function App(){
   const [showRolePerms,setShowRolePerms]=useState(false);
   const [showComposer,setShowComposer]=useState(false);
   const [showCoaching,setShowCoaching]=useState(false);
+  const [showEmailInbox,setShowEmailInbox]=useState(false);
+  const [showGmailConnect,setShowGmailConnect]=useState(false);
   const [coachingQ,setCoachingQ]=useState('');
   const [coachingA,setCoachingA]=useState('');
   const [coachingLoading,setCoachingLoading]=useState(false);
@@ -1701,6 +1927,7 @@ function App(){
     if(toolId==='wa_settings'){setShowWASettings(true);setToolsOpen(false);return;}
     if(toolId==='user_mgmt'){setShowUserMgmt(true);setToolsOpen(false);return;}
     if(toolId==='role_perms'){setShowRolePerms(true);setToolsOpen(false);return;}
+    if(toolId==='my_email'){setShowEmailInbox(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
     setActiveTool(toolId);
@@ -1996,6 +2223,7 @@ function App(){
   {showRolePerms&&loggedIn?.role==='admin'&&
     <RolePermissionsPanel onClose={()=>setShowRolePerms(false)}/>}
   {showComposer&&<OutboundWAComposer onClose={()=>setShowComposer(false)} onSent={()=>{}}/>}
+  {showEmailInbox&&<EmailInboxPanel onClose={()=>setShowEmailInbox(false)} loggedIn={loggedIn}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
     background:'var(--bg1)',border:'1px solid var(--border-hi)',

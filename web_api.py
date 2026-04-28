@@ -1285,6 +1285,242 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Per-user Gmail OAuth ──────────────────────────────────────────────────────
+# Uses Google Device Authorization Flow (no browser on server needed).
+# UI: 1) call /start → get {user_code, verification_url, device_code}
+#     2) user opens URL, enters code on their phone
+#     3) UI polls /poll with device_code until connected
+
+_GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+]
+
+@app.get("/api/oauth/google/start")
+async def oauth_google_start(session=Depends(require_auth)):
+    """Initiate Device Authorization Flow for Gmail. Returns user_code + verification_url."""
+    try:
+        from config import CONFIG as _cfg
+        gcfg = _cfg.get("google", {})
+        client_id = gcfg.get("client_id", "")
+        if not client_id:
+            raise HTTPException(status_code=400, detail="Google OAuth not configured (no client_id in config)")
+        import httpx as _hx
+        resp = _hx.post(
+            "https://oauth2.googleapis.com/device/code",
+            data={
+                "client_id": client_id,
+                "scope": " ".join(_GMAIL_SCOPES),
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Google API error: {resp.text[:200]}")
+        data = resp.json()
+        return {
+            "device_code": data["device_code"],
+            "user_code": data["user_code"],
+            "verification_url": data["verification_url"],
+            "expires_in": data.get("expires_in", 1800),
+            "interval": data.get("interval", 5),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/oauth/google/poll")
+async def oauth_google_poll(body: dict, session=Depends(require_auth)):
+    """Poll Device Authorization Flow for completion. Call every `interval` seconds."""
+    device_code = body.get("device_code", "")
+    if not device_code:
+        raise HTTPException(status_code=400, detail="device_code required")
+    try:
+        from config import CONFIG as _cfg
+        gcfg = _cfg.get("google", {})
+        import httpx as _hx
+        resp = _hx.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": gcfg.get("client_id", ""),
+                "client_secret": gcfg.get("client_secret", ""),
+                "device_code": device_code,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            timeout=15,
+        )
+        data = resp.json()
+        if "error" in data:
+            if data["error"] == "authorization_pending":
+                return {"status": "pending"}
+            if data["error"] == "slow_down":
+                return {"status": "slow_down"}
+            return {"status": "error", "detail": data.get("error_description", data["error"])}
+        # Success — fetch email address
+        access_token = data["access_token"]
+        refresh_token = data.get("refresh_token", "")
+        import json as _json
+        token_json = _json.dumps(data)
+        # Get the Gmail email address
+        email_resp = _hx.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        email_addr = email_resp.json().get("email", "") if email_resp.status_code == 200 else ""
+        username = session.get("username", "")
+        db.save_user_integration(username, "gmail", token_json, email_address=email_addr, scopes=" ".join(_GMAIL_SCOPES))
+        return {"status": "connected", "email": email_addr}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/oauth/google")
+async def oauth_google_disconnect(session=Depends(require_auth)):
+    """Disconnect the user's Gmail integration."""
+    username = session.get("username", "")
+    db.remove_user_integration(username, "gmail")
+    return {"ok": True}
+
+@app.get("/api/oauth/status")
+async def oauth_status(session=Depends(require_auth)):
+    """Return which OAuth integrations the current user has connected."""
+    username = session.get("username", "")
+    integrations = db.list_user_integrations(username)
+    return {"integrations": integrations}
+
+# ── Per-user Gmail inbox / drafting ───────────────────────────────────────────
+
+def _user_gmail_creds(username: str):
+    """Build Google Credentials from user's stored token. Raises if not connected."""
+    row = db.get_user_integration(username, "gmail")
+    if not row:
+        raise HTTPException(status_code=400, detail="Gmail not connected. Connect first via /api/oauth/google/start")
+    import json as _json
+    from config import CONFIG as _cfg
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    data = _json.loads(row["token_json"])
+    gcfg = _cfg.get("google", {})
+    creds = Credentials(
+        token=data.get("access_token"),
+        refresh_token=data.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=gcfg.get("client_id", ""),
+        client_secret=gcfg.get("client_secret", ""),
+        scopes=_GMAIL_SCOPES,
+    )
+    if creds.expired or not creds.valid:
+        creds.refresh(Request())
+        # Persist refreshed token
+        new_data = dict(data)
+        new_data["access_token"] = creds.token
+        db.save_user_integration(username, "gmail", _json.dumps(new_data),
+                                  email_address=row.get("email_address"),
+                                  scopes=row.get("scopes"))
+    return creds
+
+@app.get("/api/email/inbox")
+async def get_user_email_inbox(session=Depends(require_auth), limit: int = 20):
+    """Fetch the logged-in user's unread emails via their connected Gmail."""
+    _check_permission(session, "view_email")
+    username = session.get("username", "")
+    try:
+        from googleapiclient.discovery import build
+        creds = _user_gmail_creds(username)
+        svc = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        result = svc.users().messages().list(
+            userId="me", labelIds=["INBOX"], q="is:unread", maxResults=limit
+        ).execute()
+        emails = []
+        for msg_ref in result.get("messages", []):
+            try:
+                msg = svc.users().messages().get(userId="me", id=msg_ref["id"], format="metadata",
+                    metadataHeaders=["From", "To", "Subject", "Date"]).execute()
+                hdrs = {h["name"].lower(): h["value"]
+                        for h in msg.get("payload", {}).get("headers", [])}
+                emails.append({
+                    "message_id": msg["id"],
+                    "thread_id": msg.get("threadId", ""),
+                    "from": hdrs.get("from", ""),
+                    "subject": hdrs.get("subject", "(no subject)"),
+                    "date": hdrs.get("date", ""),
+                    "snippet": msg.get("snippet", "")[:200],
+                })
+            except Exception:
+                pass
+        return {"emails": emails, "total": len(emails)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class EmailDraftBody(BaseModel):
+    message_id: str
+    thread_id: str
+    from_addr: str
+    subject: str
+    snippet: str
+
+@app.post("/api/email/draft")
+async def draft_email_reply(body: EmailDraftBody, session=Depends(require_auth)):
+    """Ask Donna to draft a reply to an email. Returns draft text."""
+    _check_permission(session, "view_email")
+    if _ask_claude_fn is None:
+        raise HTTPException(status_code=503, detail="Chat backend not initialised")
+    username = session.get("username", "")
+    sender_name = _display_name_for(username)
+    sender_role = session.get("role", "support")
+    prompt = (
+        f"Draft a professional email reply to this message.\n\n"
+        f"From: {body.from_addr}\n"
+        f"Subject: {body.subject}\n"
+        f"Message preview: {body.snippet}\n\n"
+        f"Write only the reply body (no salutation line or signature — I will add those). "
+        f"Be concise and professional. Reply in the same language as the original message."
+    )
+    reply_text = await _ask_claude_fn(prompt, channel="web", sender_name=sender_name, sender_role=sender_role)
+    return {
+        "draft": reply_text,
+        "thread_id": body.thread_id,
+        "to": body.from_addr,
+        "subject": ("Re: " + body.subject) if not body.subject.startswith("Re:") else body.subject,
+    }
+
+class EmailSendBody(BaseModel):
+    thread_id: str
+    to: str
+    subject: str
+    body: str
+
+@app.post("/api/email/send")
+async def send_email_reply(body: EmailSendBody, session=Depends(require_auth)):
+    """Send an email reply using the user's connected Gmail account."""
+    _check_permission(session, "send_email_draft")
+    username = session.get("username", "")
+    try:
+        from googleapiclient.discovery import build
+        from email.mime.text import MIMEText
+        import base64 as _b64
+        creds = _user_gmail_creds(username)
+        svc = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        msg = MIMEText(body.body)
+        msg["To"] = body.to
+        msg["Subject"] = body.subject
+        raw = _b64.urlsafe_b64encode(msg.as_bytes()).decode()
+        sent = svc.users().messages().send(
+            userId="me",
+            body={"raw": raw, "threadId": body.thread_id},
+        ).execute()
+        return {"ok": True, "message_id": sent.get("id"), "to": body.to}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Role Permissions API ──────────────────────────────────────────────────────
 
 ALL_PERMISSIONS = [
@@ -1456,6 +1692,16 @@ async def send_whatsapp_outbound(body: OutboundWABody, session=Depends(require_a
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/whatsapp/templates")
+async def list_wa_templates(session=Depends(require_auth)):
+    """Return approved WhatsApp message templates from Meta."""
+    try:
+        import erpnext_client as _erp
+        templates = _erp.get_whatsapp_templates(limit=50)
+        return {"templates": templates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/whatsapp/check-window/{phone_number}")
 async def check_wa_window(phone_number: str, session=Depends(require_auth)):
