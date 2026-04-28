@@ -1600,6 +1600,86 @@ def cleanup_expired_sessions():
     with _conn() as conn:
         conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')")
 
+
+
+# ── User registry (RBAC) ─────────────────────────────────────────────────────
+
+def _ensure_donna_users():
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS donna_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                role TEXT DEFAULT 'agent',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_login TEXT
+            )
+        """)
+
+_ensure_donna_users()
+
+
+def upsert_donna_user(username: str, display_name: str = None, role: str = None):
+    """Create or update a user record; always updates last_login."""
+    from datetime import datetime
+    now = datetime.utcnow().isoformat(sep=' ')[:19]
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT role, display_name FROM donna_users WHERE username=?", (username,)
+        ).fetchone()
+        if existing:
+            updates, vals = ["last_login=?"], [now]
+            if display_name and not existing["display_name"]:
+                updates.append("display_name=?"); vals.append(display_name)
+            # Only upgrade role, never silently downgrade
+            if role and role in ("admin", "manager") and existing["role"] in ("agent", "viewer"):
+                updates.append("role=?"); vals.append(role)
+            vals.append(username)
+            conn.execute(f"UPDATE donna_users SET {','.join(updates)} WHERE username=?", vals)
+        else:
+            conn.execute(
+                "INSERT INTO donna_users (username, display_name, role, last_login) VALUES (?,?,?,?)",
+                (username, display_name, role or 'agent', now)
+            )
+
+
+def get_donna_user(username: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM donna_users WHERE username=?", (username,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_donna_users() -> list:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM donna_users ORDER BY role, display_name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_donna_user_role(username: str, role: str):
+    with _conn() as conn:
+        conn.execute("UPDATE donna_users SET role=? WHERE username=?", (role, username))
+
+
+def update_donna_user_name(username: str, display_name: str):
+    with _conn() as conn:
+        conn.execute("UPDATE donna_users SET display_name=? WHERE username=?", (display_name, username))
+
+
+def deactivate_donna_user(username: str):
+    with _conn() as conn:
+        conn.execute("UPDATE donna_users SET is_active=0 WHERE username=?", (username,))
+
+
+def activate_donna_user(username: str):
+    with _conn() as conn:
+        conn.execute("UPDATE donna_users SET is_active=1 WHERE username=?", (username,))
+
 # ── EOD report helpers ────────────────────────────────────────────────────────
 
 def get_eod_session(whatsapp_number: str):

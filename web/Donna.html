@@ -218,6 +218,7 @@ const TOOLS=[
     {id:'donna_suggestions',label:'Suggestions Log'},
     {id:'session_log',      label:'Session Log'},
     {id:'wa_settings',      label:'WhatsApp Settings'},
+    {id:'user_mgmt',        label:'User Management'},
   ]},
 ];
 
@@ -666,6 +667,143 @@ function ContactEditPanel({phone,onClose,onSave}){
   </div>;
 }
 
+
+function UserMgmtPanel({onClose}){
+  const [users,setUsers]=React.useState([]);
+  const [roles,setRoles]=React.useState({});
+  const [saving,setSaving]=React.useState(null);
+  const [editName,setEditName]=React.useState(null); // {username, value}
+  const ROLE_ORDER=['admin','manager','agent','viewer'];
+  const ROLE_COLOR={admin:'teal',manager:'amber',agent:'green',viewer:'gray'};
+
+  const load=()=>{
+    authFetch('/api/users').then(d=>{
+      if(d){setUsers(d.users||[]);setRoles(d.roles||{});}
+    });
+  };
+  React.useEffect(load,[]);
+
+  const setRole=async(username,role)=>{
+    setSaving(username+'_role');
+    await authFetch(`/api/users/${encodeURIComponent(username)}/role`,{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({role})
+    });
+    setSaving(null);load();
+  };
+
+  const saveName=async(username,display_name)=>{
+    if(!display_name.trim()) return;
+    setSaving(username+'_name');
+    await authFetch(`/api/users/${encodeURIComponent(username)}/name`,{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({display_name:display_name.trim()})
+    });
+    setSaving(null);setEditName(null);load();
+  };
+
+  const toggle=async(username,is_active)=>{
+    setSaving(username+'_active');
+    const ep=is_active?'deactivate':'activate';
+    await authFetch(`/api/users/${encodeURIComponent(username)}/${ep}`,{method:'PATCH'});
+    setSaving(null);load();
+  };
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:480,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+  const hdStyle={padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',
+    alignItems:'center',justifyContent:'space-between',flexShrink:0};
+
+  return <div style={panelStyle}>
+    <div style={hdStyle}>
+      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>User Management</div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>✕</button>
+    </div>
+    <div style={{padding:'12px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',flexShrink:0}}>
+      <div style={{fontSize:11,color:'var(--text-3)'}}>Users are created automatically on first login via ERPNext credentials.</div>
+    </div>
+    <div style={{overflowY:'auto',flex:1,padding:'8px 0'}}>
+      {ROLE_ORDER.map(role=>{
+        const group=users.filter(u=>u.role===role);
+        if(!group.length) return null;
+        return <div key={role} style={{marginBottom:4}}>
+          <div style={{padding:'10px 20px 4px',fontSize:10,fontWeight:700,
+            color:'var(--text-3)',letterSpacing:'0.08em',textTransform:'uppercase'}}>
+            {role} — {roles[role]?.split('—')[1]?.trim()||role}
+          </div>
+          {group.map(u=>{
+            const initials=(u.display_name||u.username).slice(0,2).toUpperCase();
+            const inactive=!u.is_active;
+            return <div key={u.username} style={{padding:'10px 20px',borderBottom:'1px solid var(--border)',
+              opacity:inactive?0.5:1,display:'flex',alignItems:'center',gap:12}}>
+              {/* Avatar */}
+              <div style={{width:36,height:36,borderRadius:'50%',background:`var(--${ROLE_COLOR[role]||'teal'}-dim)`,
+                border:`1px solid var(--${ROLE_COLOR[role]||'teal'})`,display:'flex',alignItems:'center',
+                justifyContent:'center',fontSize:11,fontWeight:700,color:`var(--${ROLE_COLOR[role]||'teal'})`,flexShrink:0}}>
+                {initials}
+              </div>
+              {/* Info */}
+              <div style={{flex:1,minWidth:0}}>
+                {editName?.username===u.username
+                  ? <div style={{display:'flex',gap:6}}>
+                      <input value={editName.value} onChange={e=>setEditName({...editName,value:e.target.value})}
+                        onKeyDown={e=>{if(e.key==='Enter')saveName(u.username,editName.value);if(e.key==='Escape')setEditName(null);}}
+                        autoFocus
+                        style={{flex:1,background:'var(--bg2)',border:'1px solid var(--teal)',borderRadius:5,
+                          padding:'3px 8px',color:'var(--text-1)',fontSize:12,outline:'none'}}/>
+                      <button onClick={()=>saveName(u.username,editName.value)}
+                        style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:5,
+                          padding:'3px 10px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                        {saving===u.username+'_name'?'…':'Save'}
+                      </button>
+                      <button onClick={()=>setEditName(null)}
+                        style={{background:'none',border:'1px solid var(--border)',borderRadius:5,
+                          padding:'3px 8px',fontSize:11,color:'var(--text-3)',cursor:'pointer'}}>✕</button>
+                    </div>
+                  : <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{fontSize:13,fontWeight:500,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                        {u.display_name||u.username.split('@')[0]}
+                      </div>
+                      <button onClick={()=>setEditName({username:u.username,value:u.display_name||''})}
+                        style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:10,padding:2,opacity:0.6}}>✎</button>
+                    </div>
+                }
+                <div style={{fontSize:10,color:'var(--text-3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:1}}>
+                  {u.username}
+                </div>
+                {u.last_login&&<div style={{fontSize:9,color:'var(--text-3)',marginTop:1}}>
+                  Last login: {u.last_login.split('T')[0]||u.last_login.split(' ')[0]}
+                </div>}
+              </div>
+              {/* Role selector */}
+              <select value={u.role}
+                onChange={e=>setRole(u.username,e.target.value)}
+                disabled={saving===u.username+'_role'}
+                style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
+                  padding:'4px 8px',color:'var(--text-1)',fontSize:11,cursor:'pointer',outline:'none'}}>
+                {ROLE_ORDER.map(r=><option key={r} value={r}>{r.charAt(0).toUpperCase()+r.slice(1)}</option>)}
+              </select>
+              {/* Active toggle */}
+              <button onClick={()=>toggle(u.username,u.is_active)}
+                disabled={saving===u.username+'_active'}
+                title={inactive?'Activate user':'Deactivate user'}
+                style={{background:inactive?'var(--bg3)':'var(--red-dim)',border:'none',borderRadius:5,
+                  padding:'4px 8px',fontSize:10,color:inactive?'var(--text-3)':'var(--red)',
+                  cursor:'pointer',flexShrink:0}}>
+                {inactive?'Enable':'Disable'}
+              </button>
+            </div>;
+          })}
+        </div>;
+      })}
+      {users.length===0&&<div style={{padding:'40px 20px',textAlign:'center',color:'var(--text-3)',fontSize:13}}>
+        No users yet — they appear on first login.
+      </div>}
+    </div>
+  </div>;
+}
+
 function WhatsAppSettingsPanel({onClose}){
   const [settings,setSettings]=React.useState(null);
   const [saving,setSaving]=React.useState(false);
@@ -819,7 +957,7 @@ function Sidebar({activeThread,setActiveThread,liveCustomers,escalations,unreadC
       <div style={{width:28,height:28,borderRadius:'50%',background:'var(--bg3)',border:'1px solid var(--border-hi)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'var(--teal)',flexShrink:0}}>{loggedIn.initials}</div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:12,fontWeight:500,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{loggedIn.name}</div>
-        <div style={{fontSize:10,color:'var(--text-3)'}}>{loggedIn.role}</div>
+        <div style={{fontSize:10,color:'var(--text-3)',textTransform:'capitalize'}}>{loggedIn.role}</div>
       </div>
       {installPrompt&&!installDone&&<button onClick={onInstall} title="Install Donna as app" style={{color:'var(--teal)',cursor:'pointer',padding:4,background:'none',border:'none',flexShrink:0}}
         onMouseEnter={e=>e.currentTarget.style.opacity=0.7}
@@ -845,9 +983,10 @@ function LoginScreen({onLogin}){
     try{
       const resp=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user.trim(),password:pass.trim()})});
       if(!resp.ok){const e=await resp.json().catch(()=>({}));setError(e.detail||'Invalid credentials');setLoading(false);return;}
-      const {token,username,role}=await resp.json();
-      const name=username;
-      onLogin({name,initials:name.split(/[\s@]/)[0].slice(0,2).toUpperCase(),role,token});
+      const data=await resp.json();
+      const {token,username,role}=data;
+      const name=data.display_name||username.split('@')[0];
+      onLogin({name,initials:name.slice(0,2).toUpperCase(),role,token,username});
     }catch(err){setError('Could not connect: '+err.message);setLoading(false);}
   };
   const inp={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 14px',color:'var(--text-1)',fontSize:14,outline:'none',fontFamily:'var(--sans)',transition:'border-color 0.15s'};
@@ -961,6 +1100,7 @@ function App(){
   const [unreadNotifs,setUnreadNotifs]=useState(0);
   const [showNotifPanel,setShowNotifPanel]=useState(false);
   const [showWASettings,setShowWASettings]=useState(false);
+  const [showUserMgmt,setShowUserMgmt]=useState(false);
   const [editingContact,setEditingContact]=useState(null);
   const chatEndRef=useRef(null);
   const msgIdRef=useRef(100);
@@ -1293,6 +1433,7 @@ function App(){
 
   const triggerTool=async toolId=>{
     if(toolId==='wa_settings'){setShowWASettings(true);setToolsOpen(false);return;}
+    if(toolId==='user_mgmt'){setShowUserMgmt(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
     setActiveTool(toolId);
@@ -1542,6 +1683,8 @@ function App(){
     </div>
   {showWASettings&&loggedIn?.role==='admin'&&
     <WhatsAppSettingsPanel onClose={()=>setShowWASettings(false)}/>}
+  {showUserMgmt&&loggedIn?.role==='admin'&&
+    <UserMgmtPanel onClose={()=>setShowUserMgmt(false)}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
     background:'var(--bg1)',border:'1px solid var(--border-hi)',

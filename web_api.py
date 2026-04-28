@@ -18,6 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 sys.path.insert(0, "/opt/cloud_agent")
+
+import logging as _logging
+_log = _logging.getLogger("donna.web_api")
 from config import CONFIG
 import database as db
 import erpnext_client as erp
@@ -61,6 +64,29 @@ _ask_claude_fn = None
 def set_ask_claude(fn):
     global _ask_claude_fn
     _ask_claude_fn = fn
+
+
+# ── Identity helper ──────────────────────────────────────────────────────────
+def _display_name_for(username: str) -> str:
+    """Derive a human first name from an ERPNext username/email."""
+    import re as _re2
+    # 1. donna_users table (authoritative)
+    try:
+        user_rec = db.get_donna_user(username)
+        if user_rec and user_rec.get("display_name"):
+            return user_rec["display_name"].split()[0]
+    except Exception:
+        pass
+    # 2. team_members config by email
+    for m in CONFIG.get("team_members", []):
+        if m.get("email", "").lower() == username.lower():
+            return m.get("name", username).split()[0]
+    # 3. Email local-part
+    if "@" in username:
+        local = username.split("@")[0]
+        name = _re2.sub(r"[^a-zA-Z]", "", local)
+        return name.capitalize() if name else username
+    return username
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -216,7 +242,9 @@ async def login(body: LoginBody):
         role = "admin" if body.username in admin_users else "team"
         token = secrets.token_urlsafe(32)
         db.create_session(token, body.username, role, ttl_hours=24)
-        return {"token": token, "username": body.username, "role": role}
+        _dn = _display_name_for(body.username)
+        db.upsert_donna_user(body.username, display_name=_dn, role=role)
+        return {"token": token, "username": body.username, "role": role, "display_name": _dn}
     except HTTPException:
         raise
     except Exception as e:
@@ -239,10 +267,74 @@ async def logout_token(body: dict):
 
 @app.get("/api/auth/me")
 async def auth_me(session=Depends(require_auth)):
-    return {"username": session["username"], "role": session["role"]}
+    _dn = _display_name_for(session["username"])
+    return {"username": session["username"], "role": session["role"], "display_name": _dn}
 
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
+
+
+# ── WhatsApp webhook (Meta Cloud API via FastAPI) ─────────────────────────────
+# Handles events on the main port (8080 → Caddy) — eliminates the need for a
+# separate aiohttp server to be publicly reachable.
+
+_wa_webhook_handler = None
+
+
+def register_wa_webhook_handler(fn):
+    """Called by cloud_agent at startup to register the processing callback."""
+    global _wa_webhook_handler
+    _wa_webhook_handler = fn
+    _log.info("WhatsApp webhook handler registered (FastAPI port 8080)")
+
+
+@app.get("/whatsapp-incoming")
+async def wa_verify(request: Request):
+    """Meta webhook verification challenge."""
+    mode      = request.query_params.get("hub.mode", "")
+    token     = request.query_params.get("hub.verify_token", "")
+    challenge = request.query_params.get("hub.challenge", "")
+    expected  = CONFIG.get("meta_whatsapp", {}).get("webhook_verify_token", "")
+    if mode == "subscribe" and token == expected and challenge:
+        _log.info("Meta webhook verification OK (port 8080)")
+        return Response(challenge, media_type="text/plain")
+    _log.warning("Meta webhook verify failed: mode=%s match=%s", mode, token == expected)
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@app.post("/whatsapp-incoming")
+async def wa_inbound(request: Request):
+    """Receive inbound WhatsApp events from Meta Cloud API."""
+    import hmac as _hmac2, hashlib as _hashlib2, json as _wjson2
+    body_bytes = await request.body()
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if sig:
+        app_secret = CONFIG.get("meta_whatsapp", {}).get("app_secret", "")
+        if app_secret:
+            expected = "sha256=" + _hmac2.new(app_secret.encode(), body_bytes, _hashlib2.sha256).hexdigest()
+            if not _hmac2.compare_digest(sig, expected):
+                _log.warning("Meta webhook HMAC mismatch (port 8080)")
+                raise HTTPException(status_code=403, detail="Forbidden")
+    else:
+        # Legacy ERPNext relay
+        secret = request.headers.get("X-Donna-Secret", "")
+        expected_s = CONFIG.get("whatsapp_webhook", {}).get("secret", "")
+        if expected_s and secret != expected_s:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        data = _wjson2.loads(body_bytes)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Bad JSON")
+
+    if _wa_webhook_handler:
+        import asyncio as _aio
+        _aio.get_event_loop().create_task(_wa_webhook_handler(data))
+    else:
+        _log.warning("wa_inbound: handler not registered yet — message queued poorly")
+
+    return Response(status_code=200)
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
     with open(f"{_WEB_DIR}/Donna.html", encoding="utf-8") as f:
@@ -1037,6 +1129,65 @@ async def test_push_notification(session=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+# ── User management (admin only) ──────────────────────────────────────────────
+
+VALID_ROLES = {"admin", "manager", "agent", "viewer"}
+
+ROLE_LABELS = {
+    "admin":   "Admin — full access",
+    "manager": "Manager — reports + customers, no settings",
+    "agent":   "Agent — own customers + basic tools",
+    "viewer":  "Viewer — read-only dashboard",
+}
+
+
+@app.get("/api/users")
+async def list_users_api(session=Depends(require_admin)):
+    users = db.list_donna_users()
+    return {"users": users, "roles": ROLE_LABELS}
+
+
+class UserRoleBody(BaseModel):
+    role: str
+
+
+class UserNameBody(BaseModel):
+    display_name: str
+
+
+@app.patch("/api/users/{username}/role")
+async def set_user_role(username: str, body: UserRoleBody, session=Depends(require_admin)):
+    if body.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"Role must be one of: {sorted(VALID_ROLES)}")
+    admin_users = _get_admin_users()
+    if username in admin_users and body.role != "admin":
+        raise HTTPException(status_code=403, detail="Cannot change role of primary admin")
+    db.update_donna_user_role(username, body.role)
+    return {"ok": True, "username": username, "role": body.role}
+
+
+@app.patch("/api/users/{username}/name")
+async def set_user_display_name(username: str, body: UserNameBody, session=Depends(require_admin)):
+    db.update_donna_user_name(username, body.display_name)
+    return {"ok": True, "username": username, "display_name": body.display_name}
+
+
+@app.patch("/api/users/{username}/deactivate")
+async def deactivate_user_api(username: str, session=Depends(require_admin)):
+    admin_users = _get_admin_users()
+    if username in admin_users:
+        raise HTTPException(status_code=403, detail="Cannot deactivate primary admin")
+    db.deactivate_donna_user(username)
+    return {"ok": True}
+
+
+@app.patch("/api/users/{username}/activate")
+async def activate_user_api(username: str, session=Depends(require_admin)):
+    db.activate_donna_user(username)
+    return {"ok": True}
+
 @app.get("/api/reports/daily")
 async def get_daily_reports_api(date: str = None, session=Depends(require_auth)):
     from datetime import date as _date
@@ -1064,10 +1215,11 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
         raise HTTPException(status_code=503, detail="Chat backend not initialised yet")
     username = session.get("username", "admin") if isinstance(session, dict) else "admin"
     try:
+        _display = _display_name_for(username)
         response = await _ask_claude_fn(
             body.message,
             channel="web",
-            sender_name="Talha",
+            sender_name=_display,
         )
         try:
             db.log_admin_message(username, "inbound", body.message)

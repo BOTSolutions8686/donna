@@ -5685,6 +5685,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Something broke. Check the logs. ({type(e).__name__}: {str(e)[:200]})")
 
 
+
+async def _dispatch_inbound_whatsapp(phone: str, text: str, msg_id: str):
+    """Route an inbound WhatsApp message (from FastAPI webhook) to the right handler."""
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    whitelist = set(CONFIG.get("communication", {}).get("whatsapp_whitelist", []))
+    if phone in whitelist:
+        sender_name = phone
+        for m in CONFIG.get("team_members", []):
+            if m.get("whatsapp") == phone:
+                sender_name = m.get("name", phone)
+                break
+        await _process_whatsapp_message(phone, text, msg_id, sender_name)
+    else:
+        await handle_customer_message(phone, text, msg_id)
+
+
 # ── WhatsApp inbound webhook ─────────────────────────────────────────────────
 
 async def _process_whatsapp_message(sender: str, sender_name: str, message: str):
@@ -5961,7 +5978,46 @@ def main():
         _telegram_bot = app.bot
         log.info("Global Telegram bot reference stored.")
 
-        # Start WhatsApp webhook server
+        # Register FastAPI webhook handler so port 8080 can receive Meta events
+        async def _fastapi_wa_dispatch(data: dict):
+            """Handle webhook payload received via the FastAPI port (8080)."""
+            import asyncio as _aio2
+            try:
+                if data.get("object") == "whatsapp_business_account":
+                    entry = data.get("entry", [{}])[0]
+                    value = entry.get("changes", [{}])[0].get("value", {})
+                    for su in value.get("statuses", []):
+                        phone = su.get("recipient_id", "")
+                        status = su.get("status", "")
+                        if phone and status:
+                            _aio2.get_event_loop().create_task(_handle_delivery_status(phone, status))
+                    for msg in value.get("messages", []):
+                        phone  = msg.get("from", "")
+                        msg_id = msg.get("id", "")
+                        mtype  = msg.get("type", "text")
+                        if mtype == "text":
+                            text = msg.get("text", {}).get("body", "")
+                        elif mtype in ("image", "document", "audio", "video", "sticker"):
+                            text = f"[{mtype}]"
+                        elif mtype == "interactive":
+                            iv = msg.get("interactive", {})
+                            text = iv.get("button_reply", iv.get("list_reply", {})).get("title", "[interactive]")
+                        else:
+                            text = f"[{mtype}]"
+                        if phone and msg_id:
+                            _aio2.get_event_loop().create_task(
+                                _dispatch_inbound_whatsapp(phone, text, msg_id)
+                            )
+            except Exception as _we:
+                log.warning("FastAPI WA dispatch error: %s", _we)
+
+        try:
+            web_api.register_wa_webhook_handler(_fastapi_wa_dispatch)
+            log.info("FastAPI WhatsApp webhook handler registered on port 8080")
+        except Exception as _rwe:
+            log.warning("Could not register FastAPI WA handler: %s", _rwe)
+
+        # Also start the aiohttp server on 8765 (kept as local fallback)
         await _webhook_runner.setup()
         site = web.TCPSite(_webhook_runner, "0.0.0.0", wa_port)
         await site.start()
