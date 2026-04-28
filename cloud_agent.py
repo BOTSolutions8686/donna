@@ -5739,14 +5739,16 @@ async def _dispatch_inbound_whatsapp(phone: str, text: str, msg_id: str):
     """Route an inbound WhatsApp message (from FastAPI webhook) to the right handler."""
     if not phone.startswith("+"):
         phone = "+" + phone
-    whitelist = set(CONFIG.get("communication", {}).get("whatsapp_whitelist", []))
-    if phone in whitelist:
+    # whitelist is a list of dicts: [{"number": "+966...", "name": "..."}]
+    whitelist_list = CONFIG.get("communication", {}).get("whatsapp_whitelist", [])
+    whitelist_nums = {w["number"] for w in whitelist_list if isinstance(w, dict) and "number" in w}
+    if phone in whitelist_nums:
         sender_name = phone
-        for m in CONFIG.get("team_members", []):
-            if m.get("whatsapp") == phone:
-                sender_name = m.get("name", phone)
+        for w in whitelist_list:
+            if isinstance(w, dict) and w.get("number") == phone:
+                sender_name = w.get("name", phone)
                 break
-        await _process_whatsapp_message(phone, text, msg_id, sender_name)
+        await _process_whatsapp_message(phone, sender_name, text)
     else:
         await handle_customer_message(phone, text, msg_id)
 
@@ -6036,10 +6038,17 @@ def main():
                     entry = data.get("entry", [{}])[0]
                     value = entry.get("changes", [{}])[0].get("value", {})
                     for su in value.get("statuses", []):
-                        phone = su.get("recipient_id", "")
-                        status = su.get("status", "")
-                        if phone and status:
-                            _aio2.get_event_loop().create_task(_handle_delivery_status(phone, status))
+                        wamid = su.get("id", "")
+                        dst   = su.get("status", "")
+                        if wamid and dst:
+                            try:
+                                db.update_delivery_status(wamid, dst)
+                                if dst == "failed":
+                                    errs = su.get("errors", [])
+                                    emsg = errs[0].get("message", "unknown") if errs else "unknown"
+                                    log.warning("WA delivery failed %s: %s", wamid[:20], emsg)
+                            except Exception as _de:
+                                log.warning("Delivery status update error: %s", _de)
                     for msg in value.get("messages", []):
                         phone  = msg.get("from", "")
                         msg_id = msg.get("id", "")

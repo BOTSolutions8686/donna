@@ -1611,7 +1611,7 @@ def _ensure_donna_users():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 display_name TEXT,
-                role TEXT DEFAULT 'agent',
+                role TEXT DEFAULT 'support',
                 is_active INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now')),
                 last_login TEXT
@@ -1634,14 +1634,14 @@ def upsert_donna_user(username: str, display_name: str = None, role: str = None)
             if display_name and not existing["display_name"]:
                 updates.append("display_name=?"); vals.append(display_name)
             # Only upgrade role, never silently downgrade
-            if role and role in ("admin", "manager") and existing["role"] in ("agent", "viewer"):
+            if role and role in ("admin", "manager") and existing["role"] in ("agent", "support", "viewer"):
                 updates.append("role=?"); vals.append(role)
             vals.append(username)
             conn.execute(f"UPDATE donna_users SET {','.join(updates)} WHERE username=?", vals)
         else:
             conn.execute(
                 "INSERT INTO donna_users (username, display_name, role, last_login) VALUES (?,?,?,?)",
-                (username, display_name, role or 'agent', now)
+                (username, display_name, role or 'support', now)
             )
 
 

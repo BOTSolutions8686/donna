@@ -253,11 +253,20 @@ async def login(body: LoginBody):
             raise HTTPException(status_code=401, detail="Invalid credentials")
         # Determine role
         admin_users = _get_admin_users()
-        role = "admin" if body.username in admin_users else "team"
-        token = secrets.token_urlsafe(32)
-        db.create_session(token, body.username, role, ttl_hours=24)
+        erpnext_role = "admin" if body.username in admin_users else "support"
+
+        # Look up existing DB role — takes precedence over ERPNext default
+        db_user = db.get_donna_user(body.username)
+        if db_user and db_user.get('role') and db_user.get('role') not in ('agent', 'team'):
+            role = db_user['role']
+        else:
+            role = erpnext_role
+
         _dn = _display_name_for(body.username)
-        db.upsert_donna_user(body.username, display_name=_dn, role=role)
+        token = secrets.token_urlsafe(32)
+        # Store correct role in session
+        db.create_session(token, body.username, role, ttl_hours=24 * 7)  # 7-day sessions
+        db.upsert_donna_user(body.username, display_name=_dn, role=erpnext_role)
         return {"token": token, "username": body.username, "role": role, "display_name": _dn}
     except HTTPException:
         raise
@@ -428,7 +437,7 @@ async def get_daily_financial():
 
 
 @app.get("/api/tools/pl-overview")
-async def get_pl():
+async def get_pl(session=Depends(require_admin)):
     try:
         invoices = erp.get_sales_invoices(days_back=30)
         purchases = erp.get_purchase_invoices(days_back=30)
@@ -726,6 +735,8 @@ async def get_customers():
                 r["claimed_by"] = cl.get("claimed_by")
                 r["claimed_by_name"] = cl.get("claimed_by_name")
                 r["donna_paused"] = 1
+                if r.get("status_color") == "green":
+                    r["status_color"] = "orange"  # amber = human claimed
             else:
                 r["claimed_by"] = None
                 r["claimed_by_name"] = None

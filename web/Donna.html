@@ -195,7 +195,7 @@ const TEAM_STATIC=[
 ];
 
 const TOOLS=[
-  {section:'Financial',adminOnly:true,items:[
+  {section:'Financial',managerOnly:true,items:[
     {id:'overdue_invoices',    label:'Overdue Invoices'},
     {id:'collections_tracker', label:'Collections Tracker'},
     {id:'payables_summary',    label:'Payables Summary'},
@@ -1201,7 +1201,13 @@ function LoginScreen({onLogin}){
       const data=await resp.json();
       const {token,username,role}=data;
       const name=data.display_name||username.split('@')[0];
-      onLogin({name,initials:name.slice(0,2).toUpperCase(),role,token,username});
+      // Fetch permissions for this role
+      let perms={};
+      try{
+        const pd=await fetch('/api/auth/permissions',{headers:{'Authorization':'Bearer '+token}});
+        if(pd.ok){const pj=await pd.json();perms=pj.permissions||{};}
+      }catch(e){}
+      onLogin({name,initials:name.slice(0,2).toUpperCase(),role,token,username,permissions:perms});
     }catch(err){setError('Could not connect: '+err.message);setLoading(false);}
   };
   const inp={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,padding:'12px 14px',color:'var(--text-1)',fontSize:14,outline:'none',fontFamily:'var(--sans)',transition:'border-color 0.15s'};
@@ -1241,6 +1247,7 @@ const makeInitialThreads=()=>({
 
 function App(){
   const [loggedIn,setLoggedIn]=useState(null);
+  // permissions: {view_financials: bool, send_whatsapp: bool, ...}
   const [authChecked,setAuthChecked]=useState(false);
   useEffect(()=>{
     const _raw=localStorage.getItem('donna-user');
@@ -1490,6 +1497,7 @@ function App(){
           lastMsg:c.last_message||'No messages yet',
           lastTime:c.last_message_time?(c.last_message_time||'').slice(11,16):'',
           flagReason:c.escalation_reason||'',
+          claimed_by:c.claimed_by||null,claimed_by_name:c.claimed_by_name||null,
         })));
       }).catch(()=>{});
       fetchApi('/api/escalations').then(d=>{if(d&&d.escalations)setEscalations(d.escalations);}).catch(()=>{});
@@ -1702,7 +1710,11 @@ function App(){
       <button onClick={()=>setToolsOpen(false)} className="mob-header-btn" style={{color:'var(--text-3)',background:'none',border:'none',cursor:'pointer',fontSize:18,lineHeight:1}}>✕</button>
     </div>
     <div style={{flex:1,overflowY:'auto',padding:'8px 8px',WebkitOverflowScrolling:'touch'}}>
-      {TOOLS.filter(s=>!s.adminOnly||(loggedIn&&loggedIn.role==='admin')).map(s=><ToolSection key={s.section} section={s.section} items={s.items} onTrigger={triggerTool} activeId={activeTool}/>)}
+      {TOOLS.filter(s=>{
+          if(s.adminOnly&&loggedIn?.role!=='admin') return false;
+          if(s.managerOnly&&!['admin','manager'].includes(loggedIn?.role)) return false;
+          return true;
+        }).map(s=><ToolSection key={s.section} section={s.section} items={s.items} onTrigger={triggerTool} activeId={activeTool}/>)}
     </div>
   </>;
 
