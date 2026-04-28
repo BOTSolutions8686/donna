@@ -1742,6 +1742,31 @@ function LoginScreen({onLogin}){
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
+// ── Message ordering utilities ────────────────────────────────────────────────
+// Deterministic ID from DB row: stable across page loads so React never
+// reassigns a DOM node to a different message.
+function stableId(direction, timestamp, content) {
+  const s = (direction||'') + '|' + (timestamp||'') + '|' + (content||'').slice(0,24);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return 'db_' + (h >>> 0).toString(36);
+}
+// Unique ID for optimistic (locally-sent) messages.
+function optId() {
+  return 'opt_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+// Sort a message array by sortKey ascending (ISO string or numeric ms string).
+function sortMsgs(msgs) {
+  return [...msgs].sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+}
+// Deduplicate a merged message array by id, keeping the last occurrence.
+function dedupMsgs(msgs) {
+  const seen = new Map();
+  for (const m of msgs) seen.set(m.id, m);
+  return [...seen.values()];
+}
+
 const makeInitialThreads=()=>({
   donna:[{id:1,from:'donna',text:"Good morning. I'm live and monitoring operations. Run a tool from the panel, or ask me anything.",ts:'09:00'}],
   talha:[{id:1,from:'donna',text:"Hi Talha. Dashboard is live. Let me know if you need anything.",ts:'09:00'}],
@@ -1846,13 +1871,18 @@ function App(){
     if(!loggedIn) return;
     authFetch('/api/admin/conversation').then(d=>{
       if(d&&d.messages&&d.messages.length>0){
-        const msgs=d.messages.map((m,i)=>({
-          id:'hist_'+i,
+        const msgs=sortMsgs(d.messages.map(m=>({
+          id:stableId(m.direction, m.timestamp, m.message_content),
           from:m.direction==='inbound'?'user':'donna',
           text:m.message_content||'',
           ts:(m.timestamp||'').slice(11,16),
-        }));
-        setThreads(prev=>({...prev,donna:[...msgs]}));
+          sortKey:m.timestamp||'',
+        })));
+        // Merge: keep any opt_ messages added in this session, discard old db_ ones
+        setThreads(prev=>{
+          const sessionMsgs=(prev.donna||[]).filter(m=>m.id.startsWith('opt_'));
+          return {...prev,donna:sortMsgs(dedupMsgs([...msgs,...sessionMsgs]))};
+        });
       }
     }).catch(()=>{});
   },[loggedIn]);
@@ -2027,17 +2057,18 @@ function App(){
       const enc=encodeURIComponent(activeThread);
       fetchApi(`/api/customers/${enc}/conversation`).then(d=>{
         if(d&&d.messages){
-          setLiveCustomerMsgs(d.messages.map((m,i)=>({
-            id:'cust_'+i,
+          setLiveCustomerMsgs(sortMsgs(d.messages.map(m=>({
+            id:stableId(m.direction, m.timestamp, m.message_content),
             from:m.direction==='inbound'?'customer':'donna',
             text:m.message_content||'',
             ts:(m.timestamp_saudi||m.timestamp||'').slice(11,16),
+            sortKey:m.timestamp||'',
             handled_by:m.handled_by,
             delivery_status:m.delivery_status||null,
             wa_message_name:m.wa_message_name||null,
             raw_text:m.message_content||'',
             onCreateTicket:m.direction==='inbound'?(txt=>setTicketDraft({phone:activeThread,text:txt})):undefined,
-          })));
+          }))));
           const cnt=d.messages.filter(m=>m.direction==='inbound').length;
           const prev=prevMsgCountRef.current[activeThread]||0;
           if(cnt>prev) setUnreadCounts(u=>({...u,[activeThread]:(u[activeThread]||0)+(cnt-prev)}));
@@ -2058,25 +2089,20 @@ function App(){
       authFetch(`/api/team/conversations/${encodeURIComponent(memberName)}`)
         .then(d=>{
           if(d&&d.messages){
-            const apiMsgs=d.messages.map((m,i)=>({
-              id:'team_api_'+i,
+            const apiMsgs=sortMsgs(d.messages.map(m=>({
+              id:stableId(m.direction, m.timestamp, m.message_content),
               from:m.direction==='outbound'?'donna':'user',
               text:m.message_content||'',
               ts:(m.timestamp||'').slice(11,16),
-            }));
-            const prevCount=lastApiMsgCountRef.current[activeThread]||0;
-            const newCount=apiMsgs.length;
-            lastApiMsgCountRef.current[activeThread]=newCount;
+              sortKey:m.timestamp||'',
+            })));
+            const apiIdSet=new Set(apiMsgs.map(m=>m.id));
+            lastApiMsgCountRef.current[activeThread]=apiMsgs.length;
             setThreads(prev=>{
               const current=prev[activeThread]||[];
-              if(newCount>prevCount||prevCount===0){
-                // API has new messages — merge, keeping local optimistic messages not yet in API
-                const apiTextSet=new Set(apiMsgs.map(m=>m.text+m.ts));
-                const localOnly=current.filter(m=>m.asHuman&&!apiTextSet.has(m.text+m.ts));
-                return {...prev,[activeThread]:[...apiMsgs,...localOnly]};
-              }
-              // Count unchanged — preserve current state (don't wipe optimistic intervene msgs)
-              return prev;
+              // Keep opt_ messages not yet reflected in API response
+              const localOnly=current.filter(m=>m.id.startsWith('opt_')&&!apiIdSet.has(m.id));
+              return {...prev,[activeThread]:sortMsgs(dedupMsgs([...apiMsgs,...localOnly]))};
             });
           }
         }).catch(()=>{});
@@ -2093,8 +2119,8 @@ function App(){
   const nowStr=()=>new Date(Date.now()+3*3600000).toISOString().slice(11,16);
   const addMessage=useCallback((threadId,msg)=>{
     setThreads(prev=>{
-      const updated={...prev,[threadId]:[...(prev[threadId]||[]),{id:msgIdRef.current++,...msg}]};
-      return updated;
+      const newMsg={id:optId(),sortKey:new Date(Date.now()+3*3600000).toISOString(),...msg};
+      return {...prev,[threadId]:sortMsgs([...(prev[threadId]||[]),newMsg])};
     });
     // Persist donna thread messages to server for cross-device sync
     if(threadId==='donna'&&msg.text&&!msg.apiToolId){
