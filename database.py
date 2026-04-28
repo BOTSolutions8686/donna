@@ -2006,7 +2006,17 @@ def list_user_integrations(username: str) -> list:
     return [dict(r) for r in rows]
 
 
+def list_all_user_integrations(integration: str) -> list:
+    """Return all users who have a specific integration connected."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM user_integrations WHERE integration=?", (integration,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def remove_user_integration(username: str, integration: str):
+
     with _conn() as conn:
         conn.execute(
             "DELETE FROM user_integrations WHERE username=? AND integration=?",

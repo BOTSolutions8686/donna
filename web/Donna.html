@@ -214,6 +214,7 @@ const TOOLS=[
     {id:'send_whatsapp',label:'Send WhatsApp'},
     {id:'send_email',   label:'Send Email'},
     {id:'my_email',     label:'My Email Inbox'},
+    {id:'calendar',     label:'Calendar'},
   ]},
   {section:'System',adminOnly:true,items:[
     {id:'donna_suggestions',label:'Suggestions Log'},
@@ -793,7 +794,27 @@ function OutboundWAComposer({onClose,onSent}){
                           <div style={{display:'flex',flexDirection:'column',gap:4,maxHeight:150,overflowY:'auto'}}>
                             {templates.map(t=><button key={t.template_name} onClick={()=>{setSelectedTemplate(t.template_name);setTemplateParams([]);}} style={{textAlign:'left',padding:'5px 8px',borderRadius:5,border:'1px solid',borderColor:selectedTemplate===t.template_name?'var(--teal)':'var(--border)',background:selectedTemplate===t.template_name?'var(--teal-dim)':'var(--bg2)',color:'var(--text-1)',cursor:'pointer',fontSize:11,marginBottom:2}}><strong>{t.template_name}</strong><span style={{color:'var(--text-3)',marginLeft:6,fontSize:9}}>{t.language}</span></button>)}
                           </div>
-                          {selectedTemplate&&<div style={{marginTop:6,fontSize:10,color:'var(--teal)'}}>Selected: {selectedTemplate}</div>}
+                          {selectedTemplate&&<div style={{marginTop:6}}>
+                            <div style={{fontSize:10,color:'var(--teal)',marginBottom:4}}>Selected: {selectedTemplate}</div>
+                            {(()=>{
+                              const tmpl=templates.find(t=>t.template_name===selectedTemplate);
+                              const count=tmpl?.param_count||0;
+                              if(!count) return null;
+                              return <div style={{marginTop:4}}>
+                                <div style={{fontSize:9,color:'var(--text-3)',marginBottom:4}}>Fill in template placeholders:</div>
+                                {Array.from({length:count},(_,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                                  <span style={{fontSize:9,color:'var(--text-3)',flexShrink:0,width:20}}>{'{{'}{i+1}{'}}'}</span>
+                                  <input value={templateParams[i]||''} onChange={e=>{const p=[...templateParams];p[i]=e.target.value;setTemplateParams(p);}}
+                                    placeholder={`Parameter ${i+1}`}
+                                    style={{flex:1,background:'var(--bg1)',border:'1px solid var(--border)',borderRadius:4,
+                                      padding:'3px 7px',color:'var(--text-1)',fontSize:11,outline:'none'}}/>
+                                </div>)}
+                                {tmpl?.body_text&&<div style={{marginTop:4,fontSize:9,color:'var(--text-3)',fontStyle:'italic',lineHeight:1.5}}>
+                                  Preview: {tmpl.body_text.slice(0,120)}
+                                </div>}
+                              </div>;
+                            })()}
+                          </div>}
                         </div>
                   }
                 </div>
@@ -957,6 +978,138 @@ function GmailConnectModal({onClose,onConnected}){
         <div style={{color:'var(--red)',fontSize:12,marginBottom:8}}>{error}</div>
         <button onClick={()=>setStep('idle')} style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'6px 14px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Try again</button>
       </div>}
+    </div>
+  </div>;
+}
+
+
+function CalendarPanel({onClose}){
+  const [events,setEvents]=React.useState(null);
+  const [showCreate,setShowCreate]=React.useState(false);
+  const [creating,setCreating]=React.useState(false);
+  const [error,setError]=React.useState('');
+  const [form,setForm]=React.useState({
+    title:'',start:'',end:'',description:'',attendees:'',location:'',with_meet:false
+  });
+
+  const load=()=>{
+    setEvents(null);
+    authFetch('/api/calendar/events?days=14').then(d=>{
+      if(d) setEvents(d.events||[]);
+    });
+  };
+  React.useEffect(load,[]);
+
+  const create=async()=>{
+    if(!form.title||!form.start||!form.end){setError('Title, start and end required');return;}
+    setCreating(true);setError('');
+    const attendees=form.attendees.split(',').map(s=>s.trim()).filter(Boolean);
+    const d=await authFetch('/api/calendar/events',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({...form,attendees})
+    }).catch(()=>null);
+    setCreating(false);
+    if(d&&d.ok){setShowCreate(false);setForm({title:'',start:'',end:'',description:'',attendees:'',location:'',with_meet:false});load();}
+    else setError(d?.detail||'Create failed');
+  };
+
+  const del=async(eventId)=>{
+    await authFetch(`/api/calendar/events/${encodeURIComponent(eventId)}`,{method:'DELETE'}).catch(()=>null);
+    load();
+  };
+
+  const fmt=(iso)=>{
+    if(!iso) return '';
+    try{
+      const d=new Date(iso);
+      return d.toLocaleString('en-SA',{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:true});
+    }catch{return iso;}
+  };
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:480,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  const inputStyle={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
+    padding:'6px 9px',color:'var(--text-1)',fontSize:12,outline:'none',boxSizing:'border-box'};
+
+  return <div style={panelStyle}>
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Calendar</div>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <button onClick={()=>setShowCreate(c=>!c)} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'5px 12px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+          + New Event
+        </button>
+        <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>&#x2715;</button>
+      </div>
+    </div>
+
+    {showCreate&&<div style={{padding:'14px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',flexShrink:0}}>
+      <div style={{fontSize:12,fontWeight:600,color:'var(--text-1)',marginBottom:10}}>New Event</div>
+      <div style={{display:'flex',flexDirection:'column',gap:7}}>
+        <input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Event title" style={inputStyle}/>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+          <div>
+            <div style={{fontSize:10,color:'var(--text-3)',marginBottom:2}}>Start</div>
+            <input type="datetime-local" value={form.start} onChange={e=>setForm({...form,start:e.target.value})} style={inputStyle}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:'var(--text-3)',marginBottom:2}}>End</div>
+            <input type="datetime-local" value={form.end} onChange={e=>setForm({...form,end:e.target.value})} style={inputStyle}/>
+          </div>
+        </div>
+        <input value={form.location} onChange={e=>setForm({...form,location:e.target.value})} placeholder="Location (optional)" style={inputStyle}/>
+        <input value={form.attendees} onChange={e=>setForm({...form,attendees:e.target.value})} placeholder="Attendees: email1@x.com, email2@x.com" style={inputStyle}/>
+        <textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Description (optional)" rows={2}
+          style={{...inputStyle,resize:'none',lineHeight:1.5}}/>
+        <label style={{display:'flex',alignItems:'center',gap:8,fontSize:11,color:'var(--text-2)',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.with_meet} onChange={e=>setForm({...form,with_meet:e.target.checked})}/>
+          Add Google Meet link
+        </label>
+        {error&&<div style={{color:'var(--red)',fontSize:11}}>{error}</div>}
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <button onClick={()=>setShowCreate(false)} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'5px 14px',fontSize:11,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
+          <button onClick={create} disabled={creating} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'5px 16px',fontSize:11,fontWeight:600,cursor:'pointer',opacity:creating?0.5:1}}>
+            {creating?'Creating…':'Create Event'}
+          </button>
+        </div>
+      </div>
+    </div>}
+
+    <div style={{overflowY:'auto',flex:1}}>
+      {events===null
+        ? <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>Loading&#8230;</div>
+        : events.length===0
+          ? <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>No events in the next 14 days</div>
+          : events.map(ev=>{
+              const hasDate=ev.start&&ev.start.includes('T');
+              return <div key={ev.event_id} style={{padding:'12px 20px',borderBottom:'1px solid var(--border)',display:'flex',gap:12,alignItems:'flex-start'}}>
+                <div style={{width:38,height:38,borderRadius:8,background:'var(--teal-dim)',border:'1px solid var(--teal)',
+                  display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <div style={{fontSize:9,color:'var(--teal)',fontWeight:700,textTransform:'uppercase',lineHeight:1}}>
+                    {ev.start?new Date(ev.start).toLocaleString('en',{month:'short'}):''}
+                  </div>
+                  <div style={{fontSize:14,fontWeight:700,color:'var(--teal)',lineHeight:1.2}}>
+                    {ev.start?new Date(ev.start).getDate():'?'}
+                  </div>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.title}</div>
+                  <div style={{fontSize:10,color:'var(--text-3)',marginTop:2}}>{fmt(ev.start)}{ev.end?' – '+fmt(ev.end):''}</div>
+                  {ev.location&&<div style={{fontSize:10,color:'var(--text-2)',marginTop:1}}>&#128205; {ev.location}</div>}
+                  {ev.attendees&&ev.attendees.length>0&&<div style={{fontSize:10,color:'var(--text-3)',marginTop:1}}>&#128100; {ev.attendees.join(', ')}</div>}
+                  {ev.meet_link&&<a href={ev.meet_link} target="_blank" rel="noreferrer" style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,color:'var(--teal)',marginTop:3,textDecoration:'none'}}>
+                    &#128249; Join Meet
+                  </a>}
+                </div>
+                <button onClick={()=>del(ev.event_id)} title="Delete event"
+                  style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:14,padding:2,flexShrink:0,opacity:0.5}}>&#x2715;</button>
+              </div>;
+            })
+      }
+    </div>
+    <div style={{padding:'10px 20px',borderTop:'1px solid var(--border)',flexShrink:0}}>
+      <button onClick={load} style={{fontSize:11,color:'var(--text-3)',background:'none',border:'none',cursor:'pointer'}}>&#8635; Refresh</button>
     </div>
   </div>;
 }
@@ -1589,6 +1742,7 @@ function App(){
   const [showCoaching,setShowCoaching]=useState(false);
   const [showEmailInbox,setShowEmailInbox]=useState(false);
   const [showGmailConnect,setShowGmailConnect]=useState(false);
+  const [showCalendar,setShowCalendar]=useState(false);
   const [coachingQ,setCoachingQ]=useState('');
   const [coachingA,setCoachingA]=useState('');
   const [coachingLoading,setCoachingLoading]=useState(false);
@@ -1928,6 +2082,7 @@ function App(){
     if(toolId==='user_mgmt'){setShowUserMgmt(true);setToolsOpen(false);return;}
     if(toolId==='role_perms'){setShowRolePerms(true);setToolsOpen(false);return;}
     if(toolId==='my_email'){setShowEmailInbox(true);setToolsOpen(false);return;}
+    if(toolId==='calendar'){setShowCalendar(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
     setActiveTool(toolId);
@@ -2224,6 +2379,7 @@ function App(){
     <RolePermissionsPanel onClose={()=>setShowRolePerms(false)}/>}
   {showComposer&&<OutboundWAComposer onClose={()=>setShowComposer(false)} onSent={()=>{}}/>}
   {showEmailInbox&&<EmailInboxPanel onClose={()=>setShowEmailInbox(false)} loggedIn={loggedIn}/>}
+  {showCalendar&&<CalendarPanel onClose={()=>setShowCalendar(false)}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',
     background:'var(--bg1)',border:'1px solid var(--border-hi)',

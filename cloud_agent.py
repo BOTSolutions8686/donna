@@ -4848,6 +4848,50 @@ async def job_email_check(app):
     except Exception as e:
         log.error('Email check job failed: %s', e, exc_info=True)
 
+    # ── Per-user connected Gmail notifications ────────────────────────────────
+    try:
+        import json as _jj
+        from googleapiclient.discovery import build as _gbuild
+        from google.oauth2.credentials import Credentials as _GCreds2
+        from google.auth.transport.requests import Request as _GReq2
+        from config import CONFIG as _cfg3
+        _gcfg3 = _cfg3.get('google', {})
+        for _ui in db.list_all_user_integrations('gmail'):
+            try:
+                _uname2 = _ui['username']
+                _tok2 = _jj.loads(_ui['token_json'])
+                _creds2 = _GCreds2(
+                    token=_tok2.get('access_token'),
+                    refresh_token=_tok2.get('refresh_token'),
+                    token_uri='https://oauth2.googleapis.com/token',
+                    client_id=_gcfg3.get('client_id', ''),
+                    client_secret=_gcfg3.get('client_secret', ''),
+                )
+                if _creds2.expired or not _creds2.valid:
+                    _creds2.refresh(_GReq2())
+                    _tok2['access_token'] = _creds2.token
+                    db.save_user_integration(_uname2, 'gmail', _jj.dumps(_tok2),
+                        email_address=_ui.get('email_address'), scopes=_ui.get('scopes'))
+                _svc2 = _gbuild('gmail', 'v1', credentials=_creds2, cache_discovery=False)
+                _res2 = _svc2.users().messages().list(
+                    userId='me', labelIds=['INBOX'], q='is:unread', maxResults=10
+                ).execute()
+                _new2 = [m for m in _res2.get('messages', []) if not db.get_processed_email(m['id'])]
+                if _new2:
+                    _display2 = _ui.get('email_address') or _uname2
+                    db.add_notification(
+                        title='New Email',
+                        body=f'{len(_new2)} new email(s) in {_display2}',
+                        category='email',
+                    )
+                    for _m2 in _new2:
+                        db.mark_email_processed(_m2['id'], _m2.get('threadId', ''), 'user_notified')
+                    log.info('Email push: notified re %d new email(s) for %s', len(_new2), _uname2)
+            except Exception as _ue2:
+                log.debug('Per-user email check failed for %s: %s', _ui.get('username'), _ue2)
+    except Exception as _pue2:
+        log.debug('Per-user email push block error: %s', _pue2)
+
 
 async def job_sla_check(app):
     """Twice daily (8:45 AM and 5:00 PM Riyadh) — SLA breach check with agent notification."""

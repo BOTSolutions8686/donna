@@ -746,15 +746,25 @@ def get_whatsapp_templates(limit: int = 50) -> list:
     )
     if r.status_code == 200:
         templates = r.json().get('data', [])
-        return [
-            {
+        result = []
+        for t in templates:
+            components = t.get('components', [])
+            body_text = ''
+            for c in components:
+                if c.get('type', '').upper() == 'BODY':
+                    body_text = c.get('text', '')
+                    break
+            import re as _re_t
+            param_count = len(set(_re_t.findall(r'\{\{(\d+)\}\}', body_text)))
+            result.append({
                 'template_name': t.get('name', ''),
                 'language': t.get('language', 'en'),
                 'status': t.get('status', ''),
                 'name': t.get('name', ''),
-            }
-            for t in templates
-        ]
+                'body_text': body_text,
+                'param_count': param_count,
+            })
+        return result
     _wa_log.warning('get_whatsapp_templates failed %s: %s', r.status_code, r.text[:100])
     return []
 

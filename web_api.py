@@ -1285,6 +1285,74 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Calendar API ──────────────────────────────────────────────────────────────
+
+@app.get("/api/calendar/events")
+async def get_calendar_events(days: int = 7, session=Depends(require_auth)):
+    """Return upcoming calendar events (uses admin Google account)."""
+    _check_permission(session, "view_calendar")
+    try:
+        import google_client as _gc
+        if not _gc.google_configured():
+            return {"events": [], "error": "Google Calendar not configured"}
+        events = _gc.get_upcoming_events(days_ahead=days, max_results=30)
+        return {"events": events}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class CalendarEventBody(BaseModel):
+    title: str
+    start: str          # ISO datetime, e.g. "2026-04-29T10:00:00"
+    end: str            # ISO datetime
+    description: str = ""
+    attendees: list = []
+    location: str = ""
+    with_meet: bool = False
+
+@app.post("/api/calendar/events")
+async def create_calendar_event(body: CalendarEventBody, session=Depends(require_auth)):
+    """Create a calendar event (optionally with Google Meet)."""
+    _check_permission(session, "view_calendar")
+    try:
+        import google_client as _gc
+        if not _gc.google_configured():
+            raise HTTPException(status_code=400, detail="Google Calendar not configured")
+        if body.with_meet:
+            result = _gc.create_event_with_meet(
+                title=body.title,
+                start_dt=body.start,
+                end_dt=body.end,
+                description=body.description,
+                attendees=body.attendees or None,
+            )
+        else:
+            result = _gc.create_event(
+                title=body.title,
+                start_dt=body.start,
+                end_dt=body.end,
+                description=body.description,
+                attendees=body.attendees or None,
+                location=body.location,
+            )
+        return {"ok": True, "event": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/calendar/events/{event_id}")
+async def delete_calendar_event(event_id: str, session=Depends(require_auth)):
+    """Delete a calendar event."""
+    _check_permission(session, "view_calendar")
+    try:
+        import google_client as _gc
+        svc = _gc._calendar()
+        svc.events().delete(calendarId="primary", eventId=event_id).execute()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Per-user Gmail OAuth ──────────────────────────────────────────────────────
 # Uses Google Device Authorization Flow (no browser on server needed).
 # UI: 1) call /start → get {user_code, verification_url, device_code}

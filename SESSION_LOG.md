@@ -1100,3 +1100,37 @@ Implemented all four remaining features from the audit list.
 - [ ] Per-user Google Calendar integration (OAuth done, but no calendar-specific UI)
 - [ ] Template parameter input UI (allow filling in {{1}} {{2}} placeholders before sending)
 - [ ] Support agent notification: when new email arrives in their connected inbox (push or WhatsApp)
+
+---
+
+## Session: 2026-04-28 (Part 4 — final remaining items)
+
+### Summary
+Implemented the three remaining items: template param inputs, per-user email push, and calendar UI.
+
+### What was done
+
+**erpnext_client.py**
+- `get_whatsapp_templates`: now parses BODY component to extract `body_text` and `param_count` (count of {{1}}, {{2}} placeholders). API response includes both fields.
+
+**database.py**
+- `list_all_user_integrations(integration)`: returns all users who have a specific integration connected (used for per-user email push).
+
+**cloud_agent.py**
+- `job_email_check`: after checking Talha's inbox, now loops through all users with Gmail connected. For each, fetches unread messages, marks as processed, and creates a Donna notification (`add_notification`) for new emails.
+
+**web_api.py**
+- `GET /api/calendar/events?days=N` — returns upcoming events from admin Google Calendar (uses existing google_client credentials)
+- `POST /api/calendar/events` — creates a calendar event (optional Google Meet link)
+- `DELETE /api/calendar/events/{event_id}` — deletes an event
+
+**web/Donna.html**
+- `OutboundWAComposer`: when a template with `param_count > 0` is selected, shows per-placeholder input fields ({{1}}, {{2}}…) and a preview of the template body text
+- `CalendarPanel`: slide-out panel showing next 14 days of events; event cards with date badge, time, location, attendees, Meet link; "+ New Event" form with datetime pickers, attendees, location, description, and Google Meet toggle; delete button per event
+- 'Calendar' added to Communication nav section
+
+### Service state
+- Active, 21 scheduler jobs (unchanged)
+
+### What is next
+- All planned items complete ✅

@@ -501,8 +501,18 @@ GmailConnectModal in web UI guides user through the device flow with user_code d
 `POST /api/email/send` sends the approved draft via user's Gmail.
 EmailInboxPanel in web UI: two-pane layout, select email → Donna drafts → approve → send.
 
-## Pending / Next
-- [ ] Template parameter input UI (for templates with {{1}} {{2}} placeholders)
-- [ ] Per-user email arrival push notifications
-- [ ] Google Calendar integration UI (view/create events from web UI)
+## Milestone 11 — Template params, email push, calendar UI (2026-04-28)
+
+### 11.1 — WhatsApp template placeholder inputs ✅ 2026-04-28
+`get_whatsapp_templates` now returns `param_count` and `body_text` per template.
+OutboundWAComposer shows per-placeholder input fields and a preview of the template text.
+
+### 11.2 — Per-user email arrival push notifications ✅ 2026-04-28
+`job_email_check` now checks each user's connected Gmail and creates a Donna notification for new unread emails. Uses `list_all_user_integrations('gmail')`.
+
+### 11.3 — Google Calendar panel in web UI ✅ 2026-04-28
+`GET/POST/DELETE /api/calendar/events` endpoints (uses admin Google account).
+CalendarPanel: 14-day event list + create form with Google Meet option.
+
+## All planned milestones complete ✅
 
