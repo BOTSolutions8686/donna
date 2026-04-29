@@ -2782,7 +2782,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             max_r = inputs.get("max_results", 20)
             since = inputs.get("since_days", 1)
             query = inputs.get("query", "")
-            emails = gcal.get_emails(max_results=max_r, query=("is:unread " + query).strip(), since_days=since)
+            emails = gcal.get_emails(max_results=max_r, query=("is:unread " + query).strip(), since_days=since, username=sender_name)
             if not emails:
                 return "No unread emails in the last %d day(s)." % since
             lines = ["%d unread email(s):\n" % len(emails)]
@@ -2800,7 +2800,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                 return "Google not configured."
             query = inputs.get("query", "")
             max_r = inputs.get("max_results", 10)
-            emails = gcal.get_emails(max_results=max_r, query=query, label="", since_days=0)
+            emails = gcal.get_emails(max_results=max_r, query=query, label="", since_days=0, username=sender_name)
             if not emails:
                 return "No emails found for query: %s" % query
             lines = ["%d email(s) found:\n" % len(emails)]
@@ -2817,7 +2817,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             if not gcal.google_configured():
                 return "Google not configured."
             thread_id = inputs.get("thread_id", "")
-            messages = gcal.get_thread(thread_id)
+            messages = gcal.get_thread(thread_id, username=sender_name)
             if not messages:
                 return "No messages found in thread %s." % thread_id
             lines = ["Thread (%d messages):\n" % len(messages)]
@@ -2889,7 +2889,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             subject = inputs.get("subject", "")
             body = inputs.get("body", "")
             reply_all = inputs.get("reply_all", True)
-            msg_id, cc_list = gcal.send_reply(thread_id, to, subject, body, reply_all=reply_all)
+            msg_id, cc_list = gcal.send_reply(thread_id, to, subject, body, reply_all=reply_all, username=sender_name)
             cc_note = (" | CC: %s" % ", ".join(cc_list)) if cc_list else ""
             return "Email sent (reply-all). Message ID: %s%s" % (msg_id, cc_note)
 
@@ -2899,7 +2899,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             to = inputs.get("to", "")
             subject = inputs.get("subject", "")
             body = inputs.get("body", "")
-            msg_id = gcal.send_new_email(to, subject, body)
+            msg_id = gcal.send_new_email(to, subject, body, username=sender_name)
             return "Email sent to %s. Message ID: %s" % (to, msg_id)
 
         elif name == "create_ticket_from_email":
@@ -2925,7 +2925,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                 return "Google not configured."
             days = inputs.get("days_ahead", 7)
             max_r = inputs.get("max_results", 20)
-            events = gcal.get_upcoming_events(days_ahead=days, max_results=max_r)
+            events = gcal.get_upcoming_events(days_ahead=days, max_results=max_r, username=sender_name)
             if not events:
                 return "No events in the next %d days." % days
             lines = ["%d upcoming event(s):\n" % len(events)]
@@ -2969,8 +2969,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             description = inputs.get("description", "")
             attendees = inputs.get("attendees", [])
             location = inputs.get("location", "")
-            event = gcal.create_event(title, start_dt, end_dt,
-                                       description=description,
+            event = gcal.create_event(title, start_dt, end_dt, username=sender_name, description=description,
                                        attendees=attendees,
                                        location=location)
             return "Event created: %s\nStart: %s\nLink: %s" % (
@@ -2981,7 +2980,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                 return "Google not configured."
             query = inputs.get("query", "")
             max_r = inputs.get("max_results", 10)
-            files = gcal.search_drive(query, max_results=max_r)
+            files = gcal.search_drive(query, max_results=max_r, username=sender_name)
             if not files:
                 return "No Drive files found matching '%s'." % query
             lines = ["%d file(s) found:\n" % len(files)]
@@ -2995,7 +2994,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             if not gcal.google_configured():
                 return "Google not configured."
             max_r = inputs.get("max_results", 10)
-            files = gcal.get_recent_drive_files(max_results=max_r)
+            files = gcal.get_recent_drive_files(max_results=max_r, username=sender_name)
             if not files:
                 return "No recent Drive files."
             lines = ["%d recent file(s):\n" % len(files)]

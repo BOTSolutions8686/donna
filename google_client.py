@@ -126,9 +126,9 @@ def google_configured(username: str = None):
 
 # ── Gmail ─────────────────────────────────────────────────────────────────────
 
-def get_emails(max_results=20, query="", label="INBOX", since_days=1):
+def get_emails(max_results=20, query="", label="INBOX", since_days=1, username=None):
     """Fetch recent emails. Returns list of parsed email dicts."""
-    svc = _gmail()
+    svc = _gmail(username)
     parts = []
     if query:
         parts.append(query)
@@ -195,7 +195,7 @@ def _extract_body(payload):
     return ""
 
 
-def send_reply(thread_id, to, subject, body, cc=None, reply_all=True):
+def send_reply(thread_id, to, subject, body, cc=None, reply_all=True, username=None):
     """
     Send an email reply in an existing thread.
     reply_all=True (default): fetches original message and CCs all To/CC recipients.
@@ -203,7 +203,7 @@ def send_reply(thread_id, to, subject, body, cc=None, reply_all=True):
     """
     import email.mime.text
     from email.utils import getaddresses
-    svc = _gmail()
+    svc = _gmail(username)
 
     # Auto-detect CC recipients for reply-all
     cc_addresses = []
@@ -239,10 +239,10 @@ def send_reply(thread_id, to, subject, body, cc=None, reply_all=True):
     return sent.get("id"), cc_addresses
 
 
-def send_new_email(to, subject, body):
+def send_new_email(to, subject, body, username=None):
     """Send a new email (not a reply)."""
     import email.mime.text
-    svc = _gmail()
+    svc = _gmail(username)
     mime = email.mime.text.MIMEText(body)
     mime["to"] = to
     mime["subject"] = subject
@@ -258,18 +258,18 @@ def mark_as_read(message_id):
     ).execute()
 
 
-def get_thread(thread_id):
+def get_thread(thread_id, username=None):
     """Fetch all messages in a thread."""
-    svc = _gmail()
+    svc = _gmail(username)
     thread = svc.users().threads().get(userId="me", id=thread_id, format="full").execute()
     return [_parse_message(m) for m in thread.get("messages", [])]
 
 
 # ── Google Calendar ───────────────────────────────────────────────────────────
 
-def get_upcoming_events(days_ahead=7, max_results=20):
+def get_upcoming_events(days_ahead=7, max_results=20, username=None):
     """Fetch upcoming calendar events."""
-    svc = _calendar()
+    svc = _calendar(username)
     now = datetime.now(timezone.utc).isoformat()
     end = (datetime.now(timezone.utc) + timedelta(days=days_ahead)).isoformat()
     result = svc.events().list(
@@ -322,9 +322,9 @@ def get_today_events():
     ]
 
 
-def create_event(title, start_dt, end_dt, description="", attendees=None, location=""):
+def create_event(title, start_dt, end_dt, description="", attendees=None, location="", username=None):
     """Create a calendar event. start_dt/end_dt are ISO strings with timezone."""
-    svc = _calendar()
+    svc = _calendar(username)
     body = {
         "summary": title,
         "description": description,
@@ -343,10 +343,10 @@ def create_event(title, start_dt, end_dt, description="", attendees=None, locati
     }
 
 
-def create_event_with_meet(title, start_dt, end_dt, description="", attendees=None):
+def create_event_with_meet(title, start_dt, end_dt, description="", attendees=None, username=None):
     """Create a calendar event with a Google Meet link. Returns meet_link in result."""
     import uuid
-    svc = _calendar()
+    svc = _calendar(username)
     body = {
         "summary": title,
         "description": description,
@@ -386,9 +386,9 @@ def create_event_with_meet(title, start_dt, end_dt, description="", attendees=No
 
 # ── Google Drive ──────────────────────────────────────────────────────────────
 
-def search_drive(query, max_results=10):
+def search_drive(query, max_results=10, username=None):
     """Search Drive files by name."""
-    svc = _drive()
+    svc = _drive(username)
     result = svc.files().list(
         q=f"name contains '{query}' and trashed=false",
         pageSize=max_results,
@@ -407,9 +407,9 @@ def search_drive(query, max_results=10):
     ]
 
 
-def get_recent_drive_files(max_results=10):
+def get_recent_drive_files(max_results=10, username=None):
     """Get recently modified Drive files."""
-    svc = _drive()
+    svc = _drive(username)
     result = svc.files().list(
         pageSize=max_results,
         fields="files(id,name,mimeType,modifiedTime,webViewLink)",
