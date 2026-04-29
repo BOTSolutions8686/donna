@@ -3375,6 +3375,15 @@ async def _handle_eod_conversation(sender_number: str, sender_name: str, message
     transcript += f"\nTeam: {message}"
 
     if state == 'collecting':
+        # Auto-finalise immediately if the reply is comprehensive (>=40 words)
+        _all_team_words = ' '.join(
+            line[5:].strip() for line in transcript.split('\n') if line.startswith('Team:')
+        )
+        if len(_all_team_words.split()) >= 40:
+            _thanks = "Got it, thanks! I'll include this in today's summary. Have a good evening!"
+            await _finalize_eod_report(sender_number, sender_name, transcript + f"\nDonna: {_thanks}")
+            db.clear_eod_session(sender_number)
+            return _thanks
         # Ask a follow-up or wrap up
         import anthropic as _ant
         try:
@@ -3491,6 +3500,15 @@ async def job_eod_report_request(app):
             _ksa = timezone(timedelta(hours=3))
             _today = datetime.now(_ksa).strftime('%Y-%m-%d')
             opener = _build_eod_opener(name)
+            # Don't overwrite a session that already has member content
+            _existing = db.get_eod_session(wa)
+            _has_content = _existing and 'Team:' in (_existing.get('transcript') or '')
+            if _has_content:
+                log.info('EOD: %s already has content in session — finalising before resend', name)
+                asyncio.get_event_loop().create_task(
+                    _finalize_eod_report(wa, name, _existing['transcript'])
+                )
+                db.clear_eod_session(wa)
             db.set_eod_session(wa, 'collecting', f"Donna: {opener}")
             db.log_daily_report_prompt(name, wa, _today)
             erp.send_whatsapp(wa, opener)
@@ -3506,11 +3524,58 @@ async def job_eod_summary(app):
     import anthropic as _ant
 
     today = date.today().isoformat()
+    # Get all members (submitted + no_response, not just submitted)
+    _all_rows = db.get_all_prompted_members_for_date(today)
     reports = db.get_daily_reports(report_date=today)
-    if not reports:
-        log.info('EOD summary: no reports collected for %s', today)
+    if not _all_rows:
+        log.info('EOD summary: no prompts sent today for %s', today)
         return
 
+    # Force-finalise any sessions still open + retroactive scan for missed content
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _ksa = _tz(_td(hours=3))
+    _open_sessions = db.get_open_eod_sessions()
+    for _sess in _open_sessions:
+        _wa = _sess['whatsapp_number']
+        _transcript = _sess.get('transcript') or ''
+        # Find member name
+        _mname = next(
+            (m['name'] for m in CONFIG.get('team_members', []) if m.get('whatsapp') == _wa),
+            _wa
+        )
+        if 'Team:' in _transcript:
+            # Has content — finalise from transcript
+            log.info('EOD force-finalise: %s has open session with content', _mname)
+            asyncio.get_event_loop().create_task(_finalize_eod_report(_wa, _mname, _transcript))
+        else:
+            # No content in session — scan inbound messages for today
+            _msgs = db.get_team_inbound_messages_for_date(_wa, today)
+            if _msgs:
+                _combined = '\n'.join(m['message_content'] for m in _msgs)
+                if len(_combined.split()) >= 20:
+                    log.info('EOD retroactive: extracting report for %s from %d messages', _mname, len(_msgs))
+                    asyncio.get_event_loop().create_task(
+                        _finalize_eod_report(_wa, _mname, f'Team (via messages):\n{_combined}')
+                    )
+                else:
+                    db.save_daily_report(_wa, _mname, today, 'No substantive update received.', status='no_response')
+            else:
+                db.save_daily_report(_wa, _mname, today, 'No response.', status='no_response')
+        db.clear_eod_session(_wa)
+    # Also mark prompted-but-silent members as no_response
+    for _pr in db.get_all_prompted_members_for_date(today):
+        if _pr.get('status') == 'prompted' and not (_pr.get('report_text') or '').strip():
+            _wa2 = _pr['whatsapp_number']
+            _msgs2 = db.get_team_inbound_messages_for_date(_wa2, today)
+            _mname2 = _pr.get('member_name', _wa2)
+            if _msgs2 and len(' '.join(m['message_content'] for m in _msgs2).split()) >= 20:
+                _combined2 = '\n'.join(m['message_content'] for m in _msgs2)
+                log.info('EOD retroactive (prompted): extracting for %s', _mname2)
+                asyncio.get_event_loop().create_task(
+                    _finalize_eod_report(_wa2, _mname2, f'Team (via messages):\n{_combined2}')
+                )
+            else:
+                db.save_daily_report(_wa2, _mname2, today, 'No response received.', status='no_response')
     # Clear any still-open sessions
     for r in reports:
         db.clear_eod_session(r['whatsapp_number'])

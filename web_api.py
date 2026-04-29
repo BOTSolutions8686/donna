@@ -667,7 +667,8 @@ async def send_email_api(body: SendEmailBody):
 
 # ── Team conversations ────────────────────────────────────────────────────────
 @app.get("/api/team/conversations/{member_id}")
-async def get_member_conversations(member_id: str):
+async def get_member_conversations(member_id: str, session=Depends(require_auth)):
+    _check_permission(session, "view_team_chat")
     member_wa = None
     member_display = member_id
     # Search team_members first, then whatsapp_whitelist (covers admin like Talha)
@@ -1250,6 +1251,7 @@ async def activate_user_api(username: str, session=Depends(require_admin)):
 
 @app.get("/api/reports/daily")
 async def get_daily_reports_api(date: str = None, session=Depends(require_auth)):
+    _check_permission(session, "view_eod_summary")
     from datetime import date as _date
     report_date = date or _date.today().isoformat()
     reports = db.get_daily_reports(report_date=report_date)
@@ -1258,10 +1260,39 @@ async def get_daily_reports_api(date: str = None, session=Depends(require_auth))
 
 @app.get("/api/reports/member/{whatsapp}")
 async def get_member_reports_api(whatsapp: str, session=Depends(require_auth)):
+    _check_permission(session, "view_eod_summary")
     import urllib.parse
     wa_decoded = urllib.parse.unquote(whatsapp)
     reports = db.get_member_report_history(wa_decoded, limit=10)
     return {"reports": reports, "whatsapp": wa_decoded, "count": len(reports)}
+
+@app.get("/api/reports/all-members")
+async def get_all_members_eod(date: str = None, session=Depends(require_auth)):
+    """Return EOD status for all team members for a given date."""
+    _check_permission(session, "view_eod_summary")
+    from datetime import date as _date
+    report_date = date or _date.today().isoformat()
+    # Get all prompted/submitted rows for this date
+    db_rows = {r["whatsapp_number"]: r for r in db.get_all_prompted_members_for_date(report_date)}
+    # Build full list from team config
+    members = []
+    for m in CONFIG.get("team_members", []):
+        wa = m.get("whatsapp", "")
+        name = m.get("name", "")
+        row = db_rows.get(wa, {})
+        members.append({
+            "name": name,
+            "whatsapp": wa,
+            "status": row.get("status", "not_prompted"),
+            "report_text": row.get("report_text", ""),
+            "submitted_at": row.get("submitted_at", ""),
+            "prompted_at": row.get("prompted_at", ""),
+        })
+    # Sort: submitted first, then no_response, then not_prompted
+    order = {"submitted": 0, "no_response": 1, "prompted": 2, "not_prompted": 3}
+    members.sort(key=lambda x: (order.get(x["status"], 9), x["name"]))
+    return {"members": members, "date": report_date, "count": len(members)}
+
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 class ChatBody(BaseModel):

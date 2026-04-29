@@ -1845,6 +1845,38 @@ def get_member_report_history(whatsapp_number: str, limit: int = 10):
         ).fetchall()
     return [dict(r) for r in rows]
 
+def get_open_eod_sessions() -> list:
+    """Return all sessions still in collecting state (not yet finalised)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM eod_session_state WHERE state='collecting'"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_team_inbound_messages_for_date(whatsapp_number: str, report_date: str) -> list:
+    """Return all inbound team messages for a given WA number on a given date (KSA)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT message_content, timestamp FROM team_conversations
+               WHERE whatsapp_number=? AND direction='inbound'
+               AND strftime('%Y-%m-%d', datetime(timestamp, '+3 hours')) = ?
+               ORDER BY timestamp ASC""",
+            (whatsapp_number, report_date)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_prompted_members_for_date(report_date: str) -> list:
+    """Return all daily_report rows for a date (prompted or submitted)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM daily_reports WHERE report_date=? ORDER BY member_name",
+            (report_date,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def is_team_message_recently_processed(whatsapp_number, message_content, within_minutes=3):
     """Content+time dedup — catches webhook/poll overlap where wa_message_name keys differ."""
     with _conn() as conn:
