@@ -28,22 +28,49 @@ SCOPES = [
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 
-def _creds():
-    """Build and return valid Google credentials, refreshing if needed."""
+def _creds(username: str = None):
+    """Build valid Google credentials for a user from user_integrations.
+    Falls back to legacy config.py tokens if username not given or not found.
+    """
+    import json as _json
     from config import CONFIG
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
+    import database as _db
 
     gcfg = CONFIG.get("google", {})
-    if not gcfg.get("client_id"):
-        raise ValueError("Google not configured. Run: python3 /opt/cloud_agent/google_client.py --auth")
+    client_id     = gcfg.get("web_client_id") or gcfg.get("client_id", "")
+    client_secret = gcfg.get("web_client_secret") or gcfg.get("client_secret", "")
 
+    # Try per-user credentials first
+    if username:
+        row = _db.get_user_integration(username, "gmail")
+        if row:
+            data = _json.loads(row["token_json"])
+            creds = Credentials(
+                token=data.get("access_token"),
+                refresh_token=data.get("refresh_token"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=SCOPES,
+            )
+            if creds.expired or not creds.valid:
+                creds.refresh(Request())
+                data["access_token"] = creds.token
+                _db.save_user_integration(username, "gmail", _json.dumps(data),
+                    email_address=row.get("email_address"), scopes=row.get("scopes"))
+            return creds
+
+    # Legacy fallback: use admin tokens from config.py
+    if not gcfg.get("refresh_token"):
+        raise ValueError("Google not configured — connect via the Donna web UI")
     creds = Credentials(
         token=gcfg.get("access_token"),
         refresh_token=gcfg.get("refresh_token"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=gcfg["client_id"],
-        client_secret=gcfg["client_secret"],
+        client_id=client_id,
+        client_secret=client_secret,
         scopes=SCOPES,
     )
     if creds.expired or not creds.valid:
@@ -69,24 +96,28 @@ def _persist_token(new_token):
         log.warning("Could not persist refreshed Google token: %s", e)
 
 
-def _gmail():
+def _gmail(username: str = None):
     from googleapiclient.discovery import build
-    return build("gmail", "v1", credentials=_creds(), cache_discovery=False)
+    return build("gmail", "v1", credentials=_creds(username), cache_discovery=False)
 
 
-def _calendar():
+def _calendar(username: str = None):
     from googleapiclient.discovery import build
-    return build("calendar", "v3", credentials=_creds(), cache_discovery=False)
+    return build("calendar", "v3", credentials=_creds(username), cache_discovery=False)
 
 
-def _drive():
+def _drive(username: str = None):
     from googleapiclient.discovery import build
-    return build("drive", "v3", credentials=_creds(), cache_discovery=False)
+    return build("drive", "v3", credentials=_creds(username), cache_discovery=False)
 
 
-def google_configured():
-    """Return True if Google credentials are present in config."""
+def google_configured(username: str = None):
+    """Return True if Google is configured — checks user_integrations first, then config."""
     try:
+        if username:
+            import database as _db
+            if _db.get_user_integration(username, "gmail"):
+                return True
         from config import CONFIG
         return bool(CONFIG.get("google", {}).get("refresh_token"))
     except Exception:

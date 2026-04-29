@@ -1062,550 +1062,69 @@ function RolePermissionsPanel({onClose}){
 
 
 function GmailConnectModal({onClose,onConnected}){
-  const [step,setStep]=React.useState('idle'); // idle|loading|waiting|done|error
-  const [info,setInfo]=React.useState(null);
+  const [step,setStep]=React.useState('idle');
   const [error,setError]=React.useState('');
-  const [polling,setPolling]=React.useState(false);
 
   const start=async()=>{
     setStep('loading');setError('');
     const d=await authFetch('/api/oauth/google/start').catch(()=>null);
-    if(!d||d.detail){setError(d?.detail||'Failed to start OAuth');setStep('error');return;}
-    setInfo(d);setStep('waiting');
-    // Start polling
-    setPolling(true);
+    if(!d||d.detail){setError(d?.detail||'Failed to get auth URL');setStep('error');return;}
+    // Open Google auth in a popup window
+    const popup=window.open(d.auth_url,'google_oauth','width=500,height=650,scrollbars=yes');
+    if(!popup){setError('Popup blocked — allow popups and try again');setStep('error');return;}
+    setStep('waiting');
+    // Listen for the postMessage from the callback page
+    const handler=async(e)=>{
+      if(e.origin!==location.origin) return;
+      if(!e.data||e.data.type!=='google_oauth_success'&&e.data.type!=='google_oauth_error') return;
+      window.removeEventListener('message',handler);
+      if(e.data.type==='google_oauth_error'){setError(e.data.error||'Auth failed');setStep('error');return;}
+      // Save token to server
+      const r=await authFetch('/api/oauth/google/save',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({token:e.data.token,email:e.data.email}),
+      }).catch(()=>null);
+      if(r&&r.ok){setStep('done');onConnected&&onConnected(e.data.email);}
+      else{setError('Failed to save token');setStep('error');}
+    };
+    window.addEventListener('message',handler);
+    // Cleanup if popup is closed without completing
+    const checkClosed=setInterval(()=>{
+      if(popup.closed){clearInterval(checkClosed);window.removeEventListener('message',handler);if(step==='waiting')setStep('idle');}
+    },1000);
   };
 
-  React.useEffect(()=>{
-    if(!polling||!info) return;
-    let stopped=false;
-    const poll=async()=>{
-      while(!stopped){
-        await new Promise(r=>setTimeout(r,(info.interval||5)*1000));
-        const d=await authFetch('/api/oauth/google/poll',{
-          method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({device_code:info.device_code})
-        }).catch(()=>null);
-        if(!d) continue;
-        if(d.status==='connected'){setStep('done');onConnected&&onConnected(d.email);stopped=true;return;}
-        if(d.status==='error'){setError(d.detail||'Auth error');setStep('error');stopped=true;return;}
-      }
-    };
-    poll();
-    return ()=>{stopped=true;};
-  },[polling,info]);
-
   return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:600,display:'flex',alignItems:'center',justifyContent:'center'}}>
-    <div style={{background:'var(--bg1)',borderRadius:12,padding:24,width:400,maxWidth:'90vw',display:'flex',flexDirection:'column',gap:14}}>
+    <div style={{background:'var(--bg1)',borderRadius:12,padding:24,width:380,maxWidth:'90vw',display:'flex',flexDirection:'column',gap:14}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-        <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Connect Gmail</div>
+        <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Connect Google Account</div>
         <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18}}>&#x2715;</button>
       </div>
       {step==='idle'&&<div>
-        <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6,marginBottom:12}}>
-          Connect your Gmail account to receive email summaries and draft replies directly in Donna.
+        <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6,marginBottom:8}}>
+          Connect your Google account to access Gmail, Calendar and Drive directly in Donna.
         </div>
+        <div style={{fontSize:11,color:'var(--text-3)',marginBottom:14}}>You will be redirected to Google in a popup to sign in and approve access.</div>
         <button onClick={start} style={{width:'100%',background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'10px',fontSize:13,fontWeight:600,cursor:'pointer'}}>
-          Connect Gmail Account
+          Connect with Google
         </button>
       </div>}
-      {step==='loading'&&<div style={{textAlign:'center',color:'var(--text-3)',fontSize:13}}>Starting authentication&#8230;</div>}
-      {step==='waiting'&&info&&<div>
-        <div style={{fontSize:12,color:'var(--text-2)',marginBottom:10,lineHeight:1.6}}>
-          Open this URL on your phone and enter the code below:
-        </div>
-        <div style={{background:'var(--bg2)',borderRadius:8,padding:12,textAlign:'center',marginBottom:10}}>
-          <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>URL</div>
-          <div style={{fontSize:13,color:'var(--teal)',wordBreak:'break-all'}}>{info.verification_url}</div>
-        </div>
-        <div style={{background:'var(--bg2)',borderRadius:8,padding:12,textAlign:'center',marginBottom:10}}>
-          <div style={{fontSize:11,color:'var(--text-3)',marginBottom:4}}>Enter this code</div>
-          <div style={{fontSize:24,fontWeight:700,letterSpacing:'0.15em',color:'var(--text-1)',fontFamily:'monospace'}}>{info.user_code}</div>
-        </div>
-        <div style={{fontSize:11,color:'var(--text-3)',textAlign:'center'}}>Waiting for authorisation&#8230;</div>
+      {step==='loading'&&<div style={{textAlign:'center',color:'var(--text-3)',fontSize:13,padding:'20px 0'}}>Opening Google sign-in&#8230;</div>}
+      {step==='waiting'&&<div style={{textAlign:'center',padding:'20px 0'}}>
+        <div style={{fontSize:28,marginBottom:8}}>🔐</div>
+        <div style={{fontSize:13,color:'var(--text-2)',marginBottom:4}}>Complete sign-in in the popup window</div>
+        <div style={{fontSize:11,color:'var(--text-3)'}}>Return here once approved — this will update automatically</div>
       </div>}
       {step==='done'&&<div style={{textAlign:'center'}}>
         <div style={{fontSize:28,marginBottom:8}}>&#10003;</div>
-        <div style={{fontSize:14,fontWeight:600,color:'var(--teal)',marginBottom:4}}>Gmail Connected!</div>
-        <button onClick={onClose} style={{marginTop:8,background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'8px 20px',fontSize:12,fontWeight:600,cursor:'pointer'}}>Done</button>
+        <div style={{fontSize:14,fontWeight:600,color:'var(--teal)',marginBottom:4}}>Google Account Connected!</div>
+        <div style={{fontSize:11,color:'var(--text-3)',marginBottom:10}}>Gmail, Calendar and Drive are now available.</div>
+        <button onClick={onClose} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:8,padding:'8px 20px',fontSize:12,fontWeight:600,cursor:'pointer'}}>Done</button>
       </div>}
       {step==='error'&&<div>
         <div style={{color:'var(--red)',fontSize:12,marginBottom:8}}>{error}</div>
         <button onClick={()=>setStep('idle')} style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,padding:'6px 14px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Try again</button>
       </div>}
-    </div>
-  </div>;
-}
-
-
-
-
-function EODPanel({onClose,loggedIn}){
-  const today=new Date(Date.now()+3*3600000).toISOString().slice(0,10);
-  const [date,setDate]=React.useState(today);
-  const [members,setMembers]=React.useState(null);
-  const [selected,setSelected]=React.useState(null);
-  const [detail,setDetail]=React.useState(null);
-  const [detailLoading,setDetailLoading]=React.useState(false);
-
-  const load=(d)=>{
-    setMembers(null);setSelected(null);setDetail(null);
-    authFetch(`/api/reports/all-members?date=${d}`).then(r=>{
-      if(r) setMembers(r.members||[]);
-    }).catch(()=>setMembers([]));
-  };
-  React.useEffect(()=>load(date),[date]);
-
-  const selectMember=(m)=>{
-    setSelected(m);
-    if(!m.report_text){setDetail(null);return;}
-    setDetail(m);
-  };
-
-  const statusCfg={
-    submitted:  {color:'var(--teal)',   bg:'var(--teal-dim)',  icon:'✓', label:'Submitted'},
-    no_response:{color:'var(--red)',    bg:'var(--red-dim,rgba(242,92,84,0.12))',   icon:'✕', label:'No Response'},
-    prompted:   {color:'var(--amber)',  bg:'var(--amber-dim)', icon:'⏳', label:'Pending'},
-    not_prompted:{color:'var(--text-3)',bg:'var(--bg3)',        icon:'–', label:'Not Prompted'},
-  };
-
-  const submitted=(members||[]).filter(m=>m.status==='submitted').length;
-  const total=(members||[]).length;
-
-  // Markdown-like bullet render
-  const renderReport=(text)=>{
-    if(!text) return null;
-    return text.split('\n').map((line,i)=>{
-      const trimmed=line.trim();
-      if(!trimmed) return <div key={i} style={{height:8}}/>;
-      if(trimmed.startsWith('- **')||trimmed.startsWith('• **')){
-        const rest=trimmed.replace(/^[-•]\s*/,'');
-        const parts=rest.split('**');
-        return <div key={i} style={{display:'flex',gap:8,marginBottom:4,alignItems:'flex-start'}}>
-          <span style={{color:'var(--teal)',flexShrink:0,marginTop:1}}>•</span>
-          <span style={{fontSize:12,color:'var(--text-1)',lineHeight:1.6}}>
-            {parts.map((p,j)=>j%2===1?<strong key={j}>{p}</strong>:<span key={j}>{p}</span>)}
-          </span>
-        </div>;
-      }
-      if(trimmed.startsWith('-')||trimmed.startsWith('•')){
-        return <div key={i} style={{display:'flex',gap:8,marginBottom:4,alignItems:'flex-start'}}>
-          <span style={{color:'var(--teal)',flexShrink:0,marginTop:1}}>•</span>
-          <span style={{fontSize:12,color:'var(--text-1)',lineHeight:1.6}}>{trimmed.replace(/^[-•]\s*/,'')}</span>
-        </div>;
-      }
-      if(trimmed.startsWith('**')&&trimmed.endsWith('**')){
-        return <div key={i} style={{fontSize:12,fontWeight:700,color:'var(--text-1)',marginBottom:4,marginTop:8}}>{trimmed.slice(2,-2)}</div>;
-      }
-      return <div key={i} style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6,marginBottom:2}}>{trimmed}</div>;
-    });
-  };
-
-  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:580,maxWidth:'100vw',
-    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
-    display:'flex',flexDirection:'column',overflow:'hidden'};
-
-  return <div style={panelStyle}>
-    {/* Header */}
-    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{fontSize:20}}>📋</div>
-          <div>
-            <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)'}}>EOD Reports</div>
-            <div style={{fontSize:11,color:'var(--text-3)'}}>
-              {members!==null?`${submitted}/${total} submitted`:'Loading…'}
-            </div>
-          </div>
-        </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <input type="date" value={date} max={today} onChange={e=>{setDate(e.target.value);load(e.target.value);}}
-            style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
-              padding:'5px 8px',color:'var(--text-1)',fontSize:12,outline:'none'}}/>
-          <button onClick={()=>load(date)} style={{background:'none',border:'1px solid var(--border)',
-            borderRadius:6,padding:'5px 10px',color:'var(--text-3)',cursor:'pointer',fontSize:12}}>↻</button>
-          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',
-            cursor:'pointer',fontSize:18,padding:4}}>✕</button>
-        </div>
-      </div>
-      {/* Progress bar */}
-      {members!==null&&total>0&&(
-        <div style={{height:4,background:'var(--bg3)',borderRadius:2,overflow:'hidden'}}>
-          <div style={{height:'100%',width:`${(submitted/total)*100}%`,
-            background:'var(--teal)',borderRadius:2,transition:'width 0.4s ease'}}/>
-        </div>
-      )}
-    </div>
-
-    {/* Split view */}
-    <div style={{flex:1,display:'flex',overflow:'hidden'}}>
-      {/* Member list */}
-      <div style={{width:220,flexShrink:0,borderRight:'1px solid var(--border)',overflowY:'auto'}}>
-        {members===null&&<div style={{padding:24,textAlign:'center',color:'var(--text-3)',fontSize:12}}>Loading…</div>}
-        {members!==null&&members.map(m=>{
-          const cfg=statusCfg[m.status]||statusCfg.not_prompted;
-          const isActive=selected?.whatsapp===m.whatsapp;
-          return <button key={m.whatsapp} onClick={()=>selectMember(m)} style={{
-            width:'100%',textAlign:'left',padding:'11px 14px',border:'none',cursor:'pointer',
-            background:isActive?'var(--bg3)':'transparent',
-            borderLeft:isActive?`3px solid ${cfg.color}`:'3px solid transparent',
-            transition:'all 0.15s',display:'flex',alignItems:'center',gap:10,
-          }}>
-            <div style={{width:28,height:28,borderRadius:'50%',background:cfg.bg,
-              border:`1px solid ${cfg.color}`,display:'flex',alignItems:'center',
-              justifyContent:'center',fontSize:12,color:cfg.color,fontWeight:700,flexShrink:0}}>
-              {cfg.icon}
-            </div>
-            <div style={{minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:500,color:isActive?'var(--text-1)':'var(--text-2)',
-                overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.name.split(' ')[0]}</div>
-              <div style={{fontSize:10,color:cfg.color,fontWeight:500}}>{cfg.label}</div>
-            </div>
-          </button>;
-        })}
-      </div>
-
-      {/* Report detail */}
-      <div style={{flex:1,overflowY:'auto',padding:'20px 24px'}}>
-        {!selected&&(
-          <div style={{height:'100%',display:'flex',flexDirection:'column',alignItems:'center',
-            justifyContent:'center',color:'var(--text-3)',gap:8}}>
-            <div style={{fontSize:32}}>📋</div>
-            <div style={{fontSize:13}}>Select a team member</div>
-          </div>
-        )}
-        {selected&&(
-          <>
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:16,fontWeight:700,color:'var(--text-1)',marginBottom:4}}>{selected.name}</div>
-              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {(() => {
-                  const cfg=statusCfg[selected.status]||statusCfg.not_prompted;
-                  return <span style={{fontSize:11,color:cfg.color,fontWeight:600,
-                    background:cfg.bg,borderRadius:5,padding:'2px 8px'}}>{cfg.label}</span>;
-                })()}
-                {selected.submitted_at&&<span style={{fontSize:11,color:'var(--text-3)',fontFamily:'var(--mono)'}}>
-                  Submitted {selected.submitted_at.slice(11,16)} KSA
-                </span>}
-              </div>
-            </div>
-            {selected.report_text?(
-              <div style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:10,padding:16}}>
-                {renderReport(selected.report_text)}
-              </div>
-            ):(
-              <div style={{padding:32,textAlign:'center',color:'var(--text-3)',fontSize:13,
-                background:'var(--bg2)',borderRadius:10,border:'1px solid var(--border)'}}>
-                {selected.status==='prompted'?'Waiting for response…':'No report submitted.'}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  </div>;
-}
-
-function RemindersPanel({onClose,loggedIn}){
-  const [reminders,setReminders]=React.useState(null);
-  const [filter,setFilter]=React.useState('pending');
-  const [cancelling,setCancelling]=React.useState(null);
-
-  const load=()=>{
-    setReminders(null);
-    authFetch('/api/reminders').then(d=>{if(d)setReminders(d.reminders||[]);}).catch(()=>setReminders([]));
-  };
-  React.useEffect(load,[]);
-
-  const cancel=async(id)=>{
-    setCancelling(id);
-    await authFetch(`/api/reminders/${id}`,{method:'DELETE'}).catch(()=>null);
-    setCancelling(null);
-    load();
-  };
-
-  const statusColors={
-    pending:'var(--teal)',sent:'var(--text-3)',cancelled:'var(--red)',failed:'var(--amber)'
-  };
-  const statusIcons={pending:'⏰',sent:'✓',cancelled:'✕',failed:'⚠'};
-
-  const filtered=(reminders||[]).filter(r=>filter==='all'||r.status===filter);
-
-  const fmtDt=(s)=>{
-    if(!s)return '';
-    const d=new Date(s.replace(' ','T'));
-    return d.toLocaleString('en-SA',{weekday:'short',month:'short',day:'numeric',
-      hour:'2-digit',minute:'2-digit',hour12:true});
-  };
-
-  const isAdmin=loggedIn?.role==='admin';
-
-  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:520,maxWidth:'100vw',
-    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
-    display:'flex',flexDirection:'column',overflow:'hidden'};
-
-  const tabStyle=(active)=>({
-    padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer',border:'none',
-    background:active?'var(--teal)':'var(--bg2)',
-    color:active?'#000':'var(--text-3)',transition:'all 0.15s',
-  });
-
-  const pending=(reminders||[]).filter(r=>r.status==='pending').length;
-
-  return <div style={panelStyle}>
-    {/* Header */}
-    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div style={{fontSize:18}}>⏰</div>
-          <div>
-            <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)'}}>Reminders</div>
-            <div style={{fontSize:11,color:'var(--text-3)'}}>
-              {isAdmin?'All users':'Your reminders'}
-              {pending>0&&<span style={{marginLeft:8,background:'var(--teal)',color:'#000',
-                borderRadius:8,padding:'1px 7px',fontSize:10,fontWeight:700}}>{pending} pending</span>}
-            </div>
-          </div>
-        </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <button onClick={load} title="Refresh" style={{background:'none',border:'1px solid var(--border)',
-            borderRadius:6,padding:'5px 10px',color:'var(--text-3)',cursor:'pointer',fontSize:12}}>↻</button>
-          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',
-            cursor:'pointer',fontSize:18,padding:4}}>✕</button>
-        </div>
-      </div>
-      {/* Filter tabs */}
-      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-        {['pending','sent','cancelled','all'].map(f=>(
-          <button key={f} onClick={()=>setFilter(f)} style={tabStyle(filter===f)}>
-            {f.charAt(0).toUpperCase()+f.slice(1)}
-            {f==='pending'&&pending>0&&` (${pending})`}
-          </button>
-        ))}
-      </div>
-    </div>
-
-    {/* List */}
-    <div style={{flex:1,overflowY:'auto'}}>
-      {reminders===null&&(
-        <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>Loading…</div>
-      )}
-      {reminders!==null&&filtered.length===0&&(
-        <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>
-          No {filter==='all'?'':filter} reminders
-        </div>
-      )}
-      {filtered.map(r=>{
-        const isPending=r.status==='pending';
-        const isMine=r.created_by===loggedIn?.username;
-        const isForMe=r.target_username===loggedIn?.username;
-        return <div key={r.id} style={{
-          padding:'14px 20px',borderBottom:'1px solid var(--border)',
-          background:isPending?'transparent':'var(--bg0)',
-          transition:'background 0.2s',
-        }}>
-          <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
-            {/* Status icon */}
-            <div style={{
-              width:36,height:36,borderRadius:10,flexShrink:0,
-              background:isPending?'var(--teal-dim)':'var(--bg3)',
-              border:`1px solid ${statusColors[r.status]||'var(--border)'}`,
-              display:'flex',alignItems:'center',justifyContent:'center',
-              fontSize:16,
-            }}>
-              {statusIcons[r.status]||'⏰'}
-            </div>
-            <div style={{flex:1,minWidth:0}}>
-              {/* Reminder text */}
-              <div style={{fontSize:13,fontWeight:600,color:isPending?'var(--text-1)':'var(--text-3)',
-                lineHeight:1.4,marginBottom:5}}>
-                {r.reminder_text}
-              </div>
-              {/* Meta row */}
-              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:4}}>
-                {/* Target */}
-                <span style={{display:'inline-flex',alignItems:'center',gap:4,
-                  background:'var(--bg3)',borderRadius:5,padding:'2px 8px',fontSize:11,color:'var(--text-2)'}}>
-                  👤 {r.target_name}
-                </span>
-                {/* Setter (admin view or if set by someone else) */}
-                {(isAdmin||!isMine)&&r.created_by&&r.created_by!==r.target_name&&(
-                  <span style={{display:'inline-flex',alignItems:'center',gap:4,
-                    background:'var(--bg3)',borderRadius:5,padding:'2px 8px',fontSize:11,color:'var(--text-3)'}}>
-                    ✍️ by {r.created_by}
-                  </span>
-                )}
-                {/* Status badge */}
-                <span style={{display:'inline-flex',alignItems:'center',gap:4,
-                  background:isPending?'var(--teal-dim)':'var(--bg3)',
-                  borderRadius:5,padding:'2px 8px',fontSize:11,
-                  color:statusColors[r.status]||'var(--text-3)',fontWeight:600}}>
-                  {r.status}
-                </span>
-              </div>
-              {/* Datetime */}
-              <div style={{fontSize:11,color:isPending?'var(--teal)':'var(--text-3)',
-                fontFamily:'var(--mono)',marginBottom:r.sent_at?4:0}}>
-                📅 {fmtDt(r.scheduled_at)}
-              </div>
-              {r.sent_at&&(
-                <div style={{fontSize:10,color:'var(--text-3)',fontFamily:'var(--mono)'}}>
-                  Sent at {fmtDt(r.sent_at)}
-                </div>
-              )}
-            </div>
-            {/* Cancel button */}
-            {isPending&&(isMine||isForMe||isAdmin)&&(
-              <button
-                onClick={()=>cancel(r.id)}
-                disabled={cancelling===r.id}
-                title="Cancel reminder"
-                style={{flexShrink:0,background:'none',border:'1px solid var(--border)',
-                  borderRadius:6,padding:'5px 10px',fontSize:11,color:'var(--red)',
-                  cursor:'pointer',opacity:cancelling===r.id?0.5:1,whiteSpace:'nowrap'}}>
-                {cancelling===r.id?'…':'Cancel'}
-              </button>
-            )}
-          </div>
-        </div>;
-      })}
-    </div>
-
-    {/* Footer */}
-    <div style={{padding:'10px 20px',borderTop:'1px solid var(--border)',flexShrink:0,
-      fontSize:11,color:'var(--text-3)'}}>
-      Say "remind me tomorrow at 9am to..." or "remind Khayam at 3pm to..." in the chat.
-    </div>
-  </div>;
-}
-
-function CalendarPanel({onClose}){
-  const [events,setEvents]=React.useState(null);
-  const [showCreate,setShowCreate]=React.useState(false);
-  const [creating,setCreating]=React.useState(false);
-  const [error,setError]=React.useState('');
-  const [form,setForm]=React.useState({
-    title:'',start:'',end:'',description:'',attendees:'',location:'',with_meet:false
-  });
-
-  const load=()=>{
-    setEvents(null);
-    authFetch('/api/calendar/events?days=14').then(d=>{
-      if(d) setEvents(d.events||[]);
-    });
-  };
-  React.useEffect(load,[]);
-
-  const create=async()=>{
-    if(!form.title||!form.start||!form.end){setError('Title, start and end required');return;}
-    setCreating(true);setError('');
-    const attendees=form.attendees.split(',').map(s=>s.trim()).filter(Boolean);
-    const d=await authFetch('/api/calendar/events',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({...form,attendees})
-    }).catch(()=>null);
-    setCreating(false);
-    if(d&&d.ok){setShowCreate(false);setForm({title:'',start:'',end:'',description:'',attendees:'',location:'',with_meet:false});load();}
-    else setError(d?.detail||'Create failed');
-  };
-
-  const del=async(eventId)=>{
-    await authFetch(`/api/calendar/events/${encodeURIComponent(eventId)}`,{method:'DELETE'}).catch(()=>null);
-    load();
-  };
-
-  const fmt=(iso)=>{
-    if(!iso) return '';
-    try{
-      const d=new Date(iso);
-      return d.toLocaleString('en-SA',{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:true});
-    }catch{return iso;}
-  };
-
-  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:480,maxWidth:'100vw',
-    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
-    display:'flex',flexDirection:'column',overflow:'hidden'};
-
-  const inputStyle={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
-    padding:'6px 9px',color:'var(--text-1)',fontSize:12,outline:'none',boxSizing:'border-box'};
-
-  return <div style={panelStyle}>
-    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
-      <div style={{fontSize:14,fontWeight:600,color:'var(--text-1)'}}>Calendar</div>
-      <div style={{display:'flex',gap:8,alignItems:'center'}}>
-        <button onClick={()=>setShowCreate(c=>!c)} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'5px 12px',fontSize:11,fontWeight:600,cursor:'pointer'}}>
-          + New Event
-        </button>
-        <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>&#x2715;</button>
-      </div>
-    </div>
-
-    {showCreate&&<div style={{padding:'14px 20px',borderBottom:'1px solid var(--border)',background:'var(--bg0)',flexShrink:0}}>
-      <div style={{fontSize:12,fontWeight:600,color:'var(--text-1)',marginBottom:10}}>New Event</div>
-      <div style={{display:'flex',flexDirection:'column',gap:7}}>
-        <input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Event title" style={inputStyle}/>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
-          <div>
-            <div style={{fontSize:10,color:'var(--text-3)',marginBottom:2}}>Start</div>
-            <input type="datetime-local" value={form.start} onChange={e=>setForm({...form,start:e.target.value})} style={inputStyle}/>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:'var(--text-3)',marginBottom:2}}>End</div>
-            <input type="datetime-local" value={form.end} onChange={e=>setForm({...form,end:e.target.value})} style={inputStyle}/>
-          </div>
-        </div>
-        <input value={form.location} onChange={e=>setForm({...form,location:e.target.value})} placeholder="Location (optional)" style={inputStyle}/>
-        <input value={form.attendees} onChange={e=>setForm({...form,attendees:e.target.value})} placeholder="Attendees: email1@x.com, email2@x.com" style={inputStyle}/>
-        <textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Description (optional)" rows={2}
-          style={{...inputStyle,resize:'none',lineHeight:1.5}}/>
-        <label style={{display:'flex',alignItems:'center',gap:8,fontSize:11,color:'var(--text-2)',cursor:'pointer'}}>
-          <input type="checkbox" checked={form.with_meet} onChange={e=>setForm({...form,with_meet:e.target.checked})}/>
-          Add Google Meet link
-        </label>
-        {error&&<div style={{color:'var(--red)',fontSize:11}}>{error}</div>}
-        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <button onClick={()=>setShowCreate(false)} style={{background:'none',border:'1px solid var(--border)',borderRadius:6,padding:'5px 14px',fontSize:11,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
-          <button onClick={create} disabled={creating} style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,padding:'5px 16px',fontSize:11,fontWeight:600,cursor:'pointer',opacity:creating?0.5:1}}>
-            {creating?'Creating…':'Create Event'}
-          </button>
-        </div>
-      </div>
-    </div>}
-
-    <div style={{overflowY:'auto',flex:1}}>
-      {events===null
-        ? <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>Loading&#8230;</div>
-        : events.length===0
-          ? <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>No events in the next 14 days</div>
-          : events.map(ev=>{
-              const hasDate=ev.start&&ev.start.includes('T');
-              return <div key={ev.event_id} style={{padding:'12px 20px',borderBottom:'1px solid var(--border)',display:'flex',gap:12,alignItems:'flex-start'}}>
-                <div style={{width:38,height:38,borderRadius:8,background:'var(--teal-dim)',border:'1px solid var(--teal)',
-                  display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  <div style={{fontSize:9,color:'var(--teal)',fontWeight:700,textTransform:'uppercase',lineHeight:1}}>
-                    {ev.start?new Date(ev.start).toLocaleString('en',{month:'short'}):''}
-                  </div>
-                  <div style={{fontSize:14,fontWeight:700,color:'var(--teal)',lineHeight:1.2}}>
-                    {ev.start?new Date(ev.start).getDate():'?'}
-                  </div>
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:600,color:'var(--text-1)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.title}</div>
-                  <div style={{fontSize:10,color:'var(--text-3)',marginTop:2}}>{fmt(ev.start)}{ev.end?' – '+fmt(ev.end):''}</div>
-                  {ev.location&&<div style={{fontSize:10,color:'var(--text-2)',marginTop:1}}>&#128205; {ev.location}</div>}
-                  {ev.attendees&&ev.attendees.length>0&&<div style={{fontSize:10,color:'var(--text-3)',marginTop:1}}>&#128100; {ev.attendees.join(', ')}</div>}
-                  {ev.meet_link&&<a href={ev.meet_link} target="_blank" rel="noreferrer" style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:10,color:'var(--teal)',marginTop:3,textDecoration:'none'}}>
-                    &#128249; Join Meet
-                  </a>}
-                </div>
-                <button onClick={()=>del(ev.event_id)} title="Delete event"
-                  style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:14,padding:2,flexShrink:0,opacity:0.5}}>&#x2715;</button>
-              </div>;
-            })
-      }
-    </div>
-    <div style={{padding:'10px 20px',borderTop:'1px solid var(--border)',flexShrink:0}}>
-      <button onClick={load} style={{fontSize:11,color:'var(--text-3)',background:'none',border:'none',cursor:'pointer'}}>&#8635; Refresh</button>
     </div>
   </div>;
 }

@@ -1398,7 +1398,7 @@ async def delete_calendar_event(event_id: str, session=Depends(require_auth)):
 #     2) user opens URL, enters code on their phone
 #     3) UI polls /poll with device_code until connected
 
-_GMAIL_SCOPES = [
+_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
@@ -1406,83 +1406,84 @@ _GMAIL_SCOPES = [
 
 @app.get("/api/oauth/google/start")
 async def oauth_google_start(session=Depends(require_auth)):
-    """Initiate Device Authorization Flow for Gmail. Returns user_code + verification_url."""
-    try:
-        from config import CONFIG as _cfg
-        gcfg = _cfg.get("google", {})
-        client_id = gcfg.get("client_id", "")
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Google OAuth not configured (no client_id in config)")
-        import httpx as _hx
-        resp = _hx.post(
-            "https://oauth2.googleapis.com/device/code",
-            data={
-                "client_id": client_id,
-                "scope": " ".join(_GMAIL_SCOPES),
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Google API error: {resp.text[:200]}")
-        data = resp.json()
-        return {
-            "device_code": data["device_code"],
-            "user_code": data["user_code"],
-            "verification_url": data["verification_url"],
-            "expires_in": data.get("expires_in", 1800),
-            "interval": data.get("interval", 5),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Return the Google authorization URL for the Web Application OAuth flow."""
+    from config import CONFIG as _cfg
+    gcfg = _cfg.get("google", {})
+    client_id = gcfg.get("web_client_id", "")
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Google Web OAuth not configured")
+    import urllib.parse as _up
+    params = _up.urlencode({
+        "client_id":     client_id,
+        "redirect_uri":  "https://donna.botsolutions.tech/api/oauth/google/callback",
+        "response_type": "code",
+        "scope":         " ".join(_GOOGLE_SCOPES),
+        "access_type":   "offline",
+        "prompt":        "consent",
+    })
+    return {"auth_url": "https://accounts.google.com/o/oauth2/v2/auth?" + params}
 
-@app.post("/api/oauth/google/poll")
-async def oauth_google_poll(body: dict, session=Depends(require_auth)):
-    """Poll Device Authorization Flow for completion. Call every `interval` seconds."""
-    device_code = body.get("device_code", "")
-    if not device_code:
-        raise HTTPException(status_code=400, detail="device_code required")
+
+@app.get("/api/oauth/google/callback")
+async def oauth_google_callback(code: str = None, error: str = None, state: str = None):
+    """Google redirects here after user approves. Exchanges code for tokens."""
+    from fastapi.responses import HTMLResponse
+    if error:
+        return HTMLResponse(f"<script>window.opener&&window.opener.postMessage({{type:'google_oauth_error',error:{repr(error)}}},location.origin);window.close();</script>", status_code=200)
+    if not code:
+        return HTMLResponse("<script>window.close();</script>", status_code=200)
     try:
         from config import CONFIG as _cfg
+        import urllib.request as _ur, urllib.parse as _up, json as _json
         gcfg = _cfg.get("google", {})
-        import httpx as _hx
-        resp = _hx.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": gcfg.get("client_id", ""),
-                "client_secret": gcfg.get("client_secret", ""),
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            },
-            timeout=15,
+        data = _up.urlencode({
+            "code":          code,
+            "client_id":     gcfg.get("web_client_id", ""),
+            "client_secret": gcfg.get("web_client_secret", ""),
+            "redirect_uri":  "https://donna.botsolutions.tech/api/oauth/google/callback",
+            "grant_type":    "authorization_code",
+        }).encode()
+        req = _ur.Request("https://oauth2.googleapis.com/token", data=data,
+                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+        resp = _ur.urlopen(req, timeout=15)
+        token_data = _json.loads(resp.read())
+        access_token = token_data.get("access_token", "")
+        # Fetch email address
+        ui_req = _ur.Request("https://www.googleapis.com/oauth2/v1/userinfo",
+                              headers={"Authorization": "Bearer " + access_token})
+        ui_resp = _ur.urlopen(ui_req, timeout=10)
+        user_info = _json.loads(ui_resp.read())
+        email_addr = user_info.get("email", "")
+        # Store token in a temporary cookie-accessible store keyed by state
+        # The popup posts the token back to the opener window
+        return HTMLResponse(
+            f"<script>"
+            f"window.opener&&window.opener.postMessage({{"
+            f"type:'google_oauth_success',"
+            f"email:{repr(email_addr)},"
+            f"token:{repr(_json.dumps(token_data))}"
+            f"}},location.origin);"
+            f"window.close();"
+            f"</script>",
+            status_code=200
         )
-        data = resp.json()
-        if "error" in data:
-            if data["error"] == "authorization_pending":
-                return {"status": "pending"}
-            if data["error"] == "slow_down":
-                return {"status": "slow_down"}
-            return {"status": "error", "detail": data.get("error_description", data["error"])}
-        # Success — fetch email address
-        access_token = data["access_token"]
-        refresh_token = data.get("refresh_token", "")
-        import json as _json
-        token_json = _json.dumps(data)
-        # Get the Gmail email address
-        email_resp = _hx.get(
-            "https://www.googleapis.com/oauth2/v1/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10,
-        )
-        email_addr = email_resp.json().get("email", "") if email_resp.status_code == 200 else ""
-        username = session.get("username", "")
-        db.save_user_integration(username, "gmail", token_json, email_address=email_addr, scopes=" ".join(_GMAIL_SCOPES))
-        return {"status": "connected", "email": email_addr}
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _log.error("OAuth callback error: %s", e)
+        return HTMLResponse(f"<script>window.opener&&window.opener.postMessage({{type:'google_oauth_error',error:{repr(str(e))}}},location.origin);window.close();</script>", status_code=200)
+
+
+@app.post("/api/oauth/google/save")
+async def oauth_google_save(body: dict, session=Depends(require_auth)):
+    """Save the token received from the OAuth popup back to the user's integration."""
+    import json as _json
+    username = session.get("username", "")
+    token_json = body.get("token", "")
+    email_addr = body.get("email", "")
+    if not token_json:
+        raise HTTPException(status_code=400, detail="token required")
+    db.save_user_integration(username, "gmail", token_json,
+                             email_address=email_addr, scopes=" ".join(_GOOGLE_SCOPES))
+    return {"ok": True, "email": email_addr}
 
 @app.delete("/api/oauth/google")
 async def oauth_google_disconnect(session=Depends(require_auth)):
@@ -1515,9 +1516,9 @@ def _user_gmail_creds(username: str):
         token=data.get("access_token"),
         refresh_token=data.get("refresh_token"),
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=gcfg.get("client_id", ""),
-        client_secret=gcfg.get("client_secret", ""),
-        scopes=_GMAIL_SCOPES,
+        client_id=gcfg.get("web_client_id", "") or gcfg.get("client_id", ""),
+        client_secret=gcfg.get("web_client_secret", "") or gcfg.get("client_secret", ""),
+        scopes=_GOOGLE_SCOPES,
     )
     if creds.expired or not creds.valid:
         creds.refresh(Request())

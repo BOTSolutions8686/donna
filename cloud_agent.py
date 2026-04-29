@@ -4324,13 +4324,6 @@ async def trigger_escalation(phone_number: str, customer_name: str, reason: str,
         'Auto-ticket in 15 minutes if no response.'
     ) % (customer_name, phone_number, reason, last_msg[:200], phone_number)
 
-    # Notify via Telegram
-    if _telegram_bot and _telegram_talha_chat_id:
-        try:
-            await _telegram_bot.send_message(chat_id=_telegram_talha_chat_id, text=alert_text)
-        except Exception as e:
-            log.warning('Escalation Telegram notify failed: %s', e)
-
     # Web notification (push handled separately below)
     db.add_notification(
         '🚩 Escalation — %s' % customer_name,
@@ -4463,16 +4456,8 @@ async def job_escalation_check(app):
             except Exception as e:
                 log.warning('Failed to notify customer %s of auto-ticket: %s', phone, e)
 
-            # Notify admin on Telegram + web
-            if _telegram_bot and _telegram_talha_chat_id:
-                try:
-                    await _telegram_bot.send_message(
-                        chat_id=_telegram_talha_chat_id,
-                        text='\U0001f3ab Auto-ticket created for %s (%s)\nReason: %s\nTicket: %s'
-                             % (cname, phone, reason, ticket_name),
-                    )
-                except Exception as e:
-                    log.warning('Escalation auto-ticket Telegram notify failed: %s', e)
+            # Notify admin via web push
+            _notify_admin(title='🎫 Auto-ticket: '+cname, body='Reason: '+reason+' | Ticket: '+ticket_name, tag='escalation')
             db.add_notification(
                 'Auto-Ticket Created — %s' % cname,
                 'Ticket %s created for %s. Reason: %s' % (ticket_name, phone, reason),
@@ -4575,15 +4560,9 @@ def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = N
         return "template_sent"
 
 
-async def _notify_talha(text: str):
-    """Silently notify Talha on Telegram."""
-    if _telegram_bot:
-        try:
-            asyncio.get_event_loop().create_task(
-                _telegram_bot.send_message(chat_id=_telegram_talha_chat_id, text=text)
-            )
-        except Exception as e:
-            log.warning("Talha notification failed: %s", e)
+def _notify_talha(text: str):
+    """Notify admin via push + in-app (replaces Telegram)."""
+    _notify_admin(title='Donna', body=text[:200], tag='donna')
 
 
 async def ask_claude_team(member: dict, message: str) -> str:
@@ -4752,14 +4731,6 @@ async def job_takeover_expiry(app):
                 db.resolve_customer_escalation(esc['id'], 'expired')
                 log.info('Takeover expired for %s (%s) — Donna resumed',
                          esc['customer_name'], esc['phone_number'])
-                if _telegram_bot and _telegram_talha_chat_id:
-                    asyncio.get_event_loop().create_task(
-                        _telegram_bot.send_message(
-                            chat_id=_telegram_talha_chat_id,
-                            text='⏱ Takeover for %s (%s) auto-expired after 2h inactivity. '
-                                 'Donna has resumed.' % (esc['customer_name'], esc['phone_number'])
-                        )
-                    )
                 # Web notification (no push — low urgency)
                 db.add_notification(
                     'Takeover Expired — %s' % esc['customer_name'],
@@ -4994,15 +4965,11 @@ async def job_whatsapp_inbound_poll(app):
                     db.resolve_pending_context(sender_number, ticket_ref)
 
                 # Only tell Talha — needs his approval to close
-                if _telegram_bot and _telegram_talha_chat_id:
-                    alert = (
-                        '%s says ticket #%s is resolved:\n\n"%s"\n\n'
-                        'Close it? Reply: resolve %s'
-                    ) % (sender_name, ticket_ref, content_raw, ticket_ref)
-                    try:
-                        await _telegram_bot.send_message(chat_id=_telegram_talha_chat_id, text=alert)
-                    except Exception as e:
-                        log.warning('Telegram alert failed: %s', e)
+                _notify_admin(
+                    title='%s: Ticket resolved' % sender_name,
+                    body='Ticket #%s: %s' % (ticket_ref, content_raw[:100]),
+                    tag='ticket-resolved'
+                )
                 continue
 
             # ── Ticket reference but not resolution → post as comment, no Talha needed ──
@@ -5047,64 +5014,7 @@ async def job_whatsapp_inbound_poll(app):
 
 
 async def job_email_check(app):
-    """Every 30 minutes -- check for new unread emails requiring action."""
-    try:
-        if not gcal.google_configured():
-            return
-
-        emails = gcal.get_unread_emails(max_results=20, since_days=1)
-        new_emails = [e for e in emails if not db.get_processed_email(e['message_id'])]
-
-        if not new_emails:
-            return
-
-        threads = {}
-        for e in new_emails:
-            tid = e.get('thread_id', e['message_id'])
-            if tid not in threads:
-                threads[tid] = []
-            threads[tid].append(e)
-
-        bot = _telegram_bot
-        chat_id = _telegram_talha_chat_id
-        if not bot or not chat_id:
-            return
-
-        for thread_id, thread_emails in threads.items():
-            latest = thread_emails[-1]
-            from_addr = latest.get('from_addr', '')
-            from_name = latest.get('from_name', from_addr)
-            subject = latest.get('subject', '(no subject)')
-            snippet = latest.get('snippet', '')
-
-            memory = db.get_email_memory(from_addr)
-            mem_note = ''
-            if memory and memory.get('last_action_taken'):
-                mem_note = '\nPrev: %s (%s)' % (memory['last_action_taken'], memory.get('last_action_date', ''))
-
-            count_note = ' (+%d more in thread)' % (len(thread_emails) - 1) if len(thread_emails) > 1 else ''
-
-            alert = (
-                'New email from %s <%s>%s\n'
-                'Subject: %s\n'
-                'Preview: %s%s\n\n'
-                'Thread ID: %s\n'
-                "Reply with: 'draft reply [thread_id]' | 'open ticket [thread_id]' | 'ignore [thread_id]'"
-            ) % (from_name, from_addr, count_note, subject, snippet[:200], mem_note, thread_id)
-
-            try:
-                await bot.send_message(chat_id=chat_id, text=alert)
-            except Exception as e:
-                log.warning('Email alert Telegram send failed: %s', e)
-
-            for e in thread_emails:
-                db.mark_email_processed(e['message_id'], thread_id, 'alerted')
-
-        log.info('Email check: alerted Talha about %d thread(s)', len(threads))
-
-    except Exception as e:
-        log.error('Email check job failed: %s', e, exc_info=True)
-
+    """Every 30 minutes — check all connected users for new unread emails."""
     # ── Per-user connected Gmail notifications ────────────────────────────────
     try:
         import json as _jj
@@ -5265,16 +5175,13 @@ async def job_sla_check(app):
                 )
 
         # FIX 3: Send Talha digest of unassigned breaches only
-        if unassigned_breaches and _telegram_bot and _telegram_talha_chat_id:
+        if unassigned_breaches:
             lines = ['SLA BREACHES — Unassigned tickets (%d):' % len(unassigned_breaches)]
             lines.extend(unassigned_breaches[:15])
             if old_ticket_count:
                 lines.append('\n(%d tickets older than 90 days excluded — see Monday digest)' % old_ticket_count)
             _sla_text = '\n'.join(lines)
-            await _telegram_bot.send_message(
-                chat_id=_telegram_talha_chat_id,
-                text=_sla_text
-            )
+            _notify_admin(title='🚨 SLA Breaches', body=_sla_text[:500], tag='sla', urgent=True)
             # Web notification + push
             _sla_title = 'SLA Breaches — %d unassigned tickets' % len(unassigned_breaches)
             db.add_notification(_sla_title, '\n'.join(unassigned_breaches[:10]), 'alert')
@@ -5334,7 +5241,7 @@ async def job_old_tickets_digest(app):
                 )
             )
 
-        if not old_tickets or not _telegram_bot or not _telegram_talha_chat_id:
+        if not old_tickets:
             return
 
         lines = ['Old Open Tickets Needing Closure (%d tickets, 90+ days old):' % len(old_tickets)]
@@ -5343,16 +5250,7 @@ async def job_old_tickets_digest(app):
             lines.append('... and %d more.' % (len(old_tickets) - 20))
 
         _ot_text = '\n'.join(lines)
-        await _telegram_bot.send_message(
-            chat_id=_telegram_talha_chat_id,
-            text=_ot_text
-        )
-        # Web notification
-        db.add_notification(
-            'Old Tickets Digest — %d tickets (90+ days)' % len(old_tickets),
-            '\n'.join(old_tickets[:10]),
-            'warning'
-        )
+        _notify_admin(title='🎫 Old Tickets (%d, 90+ days)' % len(old_tickets), body=_ot_text[:500], tag='tickets')
         log.info('Old tickets digest: sent %d tickets to Talha', len(old_tickets))
 
     except Exception as e:
@@ -5381,13 +5279,7 @@ async def job_delivery_check(app):
                     member = row.get('team_member_name', row.get('whatsapp_number'))
                     preview = row.get('message_content', '')[:80]
                     alert = ('WA delivery failed to %s\nMessage: "%s"\nRetry via WhatsApp or use email instead?') % (member, preview)
-                    if _telegram_bot and _telegram_talha_chat_id:
-                        try:
-                            await _telegram_bot.send_message(
-                                chat_id=_telegram_talha_chat_id, text=alert
-                            )
-                        except Exception as e:
-                            log.warning('Delivery failure alert send failed: %s', e)
+                    _notify_admin(title='📵 WA Delivery Failed', body=alert, tag='delivery-fail', urgent=False)
                     # Web notification + push for delivery failures
                     db.add_notification(
                         'WA Delivery Failed — %s' % (row.get('team_member_name') or row.get('whatsapp_number', '?')),
@@ -5525,16 +5417,7 @@ async def job_zatca_check(app):
                     log.error("Ticket creation failed: %s", e)
                     msg += "\n❌ Ticket creation failed"
 
-            await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
-            if is_rejection:
-                asyncio.get_event_loop().create_task(
-                    send_push_notification(
-                        title='⚠️ ZATCA Rejection',
-                        body=f'{invoice}: {status}',
-                        url='/?tool=zatca-status',
-                        tag='zatca',
-                    )
-                )
+            _notify_admin(title=msg.split('\n')[0], body=msg, tag='zatca', url='/?tool=zatca-status', urgent=True)
             db.record_zatca_alert(
                 issue["name"], invoice, status, zatca_st, http_code,
                 ticket_created=bool(ticket_name), ticket_name=ticket_name,
@@ -5622,15 +5505,7 @@ async def job_daily_summary(app):
         )
         summary = response.content[0].text if response.content else context
 
-        await _send(app.bot, summary, chat_id=CONFIG["telegram"]["allowed_user_id"])
-        asyncio.get_event_loop().create_task(
-            send_push_notification(
-                title='☀️ Morning Briefing',
-                body='Your daily Donna briefing is ready',
-                url='/?tab=briefing',
-                tag='daily-briefing',
-            )
-        )
+        _notify_admin(title='☀️ Morning Briefing', body=summary[:500], tag='daily-briefing', url='/')
 
         # Save today's snapshot for tomorrow's comparison + update collections tracker
         db.save_daily_snapshot(date.today().isoformat(), overdue, proformas)
@@ -5695,7 +5570,7 @@ async def job_collections_escalation(app):
             }],
         )
         msg = response.content[0].text if response.content else "\n".join(context_lines)
-        await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+        _notify_admin(title="📊 Collections Escalation", body=msg[:500], tag="collections", urgent=True)
         db.log_scheduled_run("collections_escalation", f"{len(flagged)} escalated")
     except Exception as e:
         log.error("Collections escalation failed: %s", e)
@@ -5726,7 +5601,7 @@ async def job_health_check(app):
 
         if issues:
             msg = "⚠️ Health Alert:\n" + "\n".join(issues)
-            await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+            _notify_admin(title="⚠️ Health Alert", body=msg, tag="health", urgent=True)
             db.log_scheduled_run("health_check", f"ISSUES: {len(issues)}")
         else:
             db.log_scheduled_run("health_check", "ok")
@@ -5793,7 +5668,7 @@ async def job_monthly_pl_digest(app):
             }],
         )
         msg = response.content[0].text if response.content else "\n".join(context_lines)
-        await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+        _notify_admin(title='📊 Monthly P&L', body=msg[:500], tag='monthly-pl')
         db.log_scheduled_run("monthly_pl_digest", f"{last_month_end.strftime('%Y-%m')} sent")
     except Exception as e:
         log.error("Monthly P&L digest failed: %s", e)
@@ -5880,7 +5755,7 @@ async def job_team_accountability_report(app):
             }],
         )
         msg = response.content[0].text if response.content else "\n".join(context_lines)
-        await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+        _notify_admin(title="👥 Team Accountability", body=msg[:500], tag="team-accountability")
         db.log_scheduled_run("team_accountability", f"{len(summary)} member(s) reported")
     except Exception as e:
         log.error("Team accountability report failed: %s", e)
@@ -5931,7 +5806,7 @@ async def job_suggestions_digest(app):
             }],
         )
         msg = response.content[0].text if response.content else "\n".join(context_lines)
-        await _send(app.bot, msg, chat_id=CONFIG["telegram"]["allowed_user_id"])
+        _notify_admin(title="💡 Suggestions Digest", body=msg[:500], tag="suggestions")
         db.log_scheduled_run("suggestions_digest", f"{len(items)} open, {len(high)} high")
     except Exception as e:
         log.error("Suggestions digest failed: %s", e)
@@ -6255,6 +6130,23 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
 import hmac as _hmac
 import hashlib as _hashlib
 
+def _notify_admin(title: str, body: str, tag: str = 'donna', url: str = '/', urgent: bool = False):
+    """Replace Telegram: send WhatsApp to admin + PWA push + in-app notification."""
+    admin_wa = CONFIG.get('communication', {}).get('admin_whatsapp', '')
+    # In-app notification (always)
+    db.add_notification(title=title, body=body, category=tag)
+    # PWA push (always)
+    asyncio.get_event_loop().create_task(
+        send_push_notification(title=title, body=body[:100], tag=tag, url=url)
+    )
+    # WhatsApp for urgent/critical alerts only
+    if urgent and admin_wa:
+        try:
+            erp.send_whatsapp(admin_wa, f"{title}\n{body}")
+        except Exception as _nwe:
+            log.debug('_notify_admin WA failed: %s', _nwe)
+
+
 
 def _verify_meta_signature(body: bytes, sig_header: str) -> bool:
     """Verify Meta webhook X-Hub-Signature-256 HMAC. Returns True if valid or unconfigured."""
@@ -6322,13 +6214,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
                         errs = su.get("errors", [])
                         emsg = errs[0].get("message", "unknown") if errs else "unknown"
                         log.warning("WA delivery failed for %s: %s", wamid[:20], emsg)
-                        if _telegram_bot and _telegram_talha_chat_id:
-                            alert = "\u26a0\ufe0f WA delivery failed\nID: " + wamid[:20] + "\nReason: " + emsg
-                            asyncio.get_event_loop().create_task(
-                                _telegram_bot.send_message(
-                                    chat_id=_telegram_talha_chat_id, text=alert
-                                )
-                            )
+                        _notify_admin(title='⚠️ WA Delivery Failed', body='ID: '+wamid[:20]+'\nReason: '+emsg, tag='delivery-fail', urgent=True)
             meta_msgs = value.get("messages", [])
             if meta_msgs:
                 for mm in meta_msgs:
