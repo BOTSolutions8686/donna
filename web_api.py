@@ -1400,9 +1400,13 @@ async def delete_calendar_event(event_id: str, session=Depends(require_auth)):
 # ── Per-user Google OAuth (Web Application redirect flow) ─────────────────────
 
 _GOOGLE_SCOPES = [
+    "openid",
+    "email",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 @app.get("/api/oauth/google/start")
@@ -1446,15 +1450,40 @@ async def oauth_google_callback(code: str = None, error: str = None, state: str 
         }).encode()
         req = _ur.Request("https://oauth2.googleapis.com/token", data=data,
                           headers={"Content-Type": "application/x-www-form-urlencoded"})
-        resp = _ur.urlopen(req, timeout=15)
-        token_data = _json.loads(resp.read())
+        try:
+            resp = _ur.urlopen(req, timeout=15)
+            token_data = _json.loads(resp.read())
+        except _ur.error.HTTPError as _he:
+            _body = _he.read().decode('utf-8', errors='replace')
+            _log.error("OAuth token exchange HTTP %d: %s", _he.code, _body[:300])
+            raise Exception(f"Google token exchange failed ({_he.code}): {_body[:200]}")
         access_token = token_data.get("access_token", "")
-        # Fetch email address
-        ui_req = _ur.Request("https://www.googleapis.com/oauth2/v1/userinfo",
-                              headers={"Authorization": "Bearer " + access_token})
-        ui_resp = _ur.urlopen(ui_req, timeout=10)
-        user_info = _json.loads(ui_resp.read())
-        email_addr = user_info.get("email", "")
+        granted_scope = token_data.get("scope", "")
+        has_id_token = bool(token_data.get("id_token"))
+        _log.info("OAuth token received — scopes: %s | id_token: %s", granted_scope[:120], has_id_token)
+        # Extract email — try id_token JWT first, then userinfo, then leave blank
+        email_addr = ""
+        id_token = token_data.get("id_token", "")
+        if id_token:
+            try:
+                import base64 as _b64
+                payload_b64 = id_token.split(".")[1]
+                payload_b64 += "=" * (4 - len(payload_b64) % 4)
+                payload = _json.loads(_b64.urlsafe_b64decode(payload_b64))
+                email_addr = payload.get("email", "")
+                _log.info("OAuth: email from id_token: %s", email_addr)
+            except Exception as _je:
+                _log.warning("id_token decode failed: %s", _je)
+        if not email_addr and access_token:
+            try:
+                ui_req = _ur.Request("https://openidconnect.googleapis.com/v1/userinfo",
+                                      headers={"Authorization": "Bearer " + access_token})
+                ui_resp = _ur.urlopen(ui_req, timeout=10)
+                email_addr = _json.loads(ui_resp.read()).get("email", "")
+                _log.info("OAuth: email from userinfo: %s", email_addr)
+            except Exception as _ue:
+                _log.warning("Userinfo failed: %s — saving token without email", _ue)
+        # Save token even if email is unknown — functionality works without it
         # Store token in a temporary cookie-accessible store keyed by state
         # The popup posts the token back to the opener window
         return HTMLResponse(
