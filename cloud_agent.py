@@ -3140,24 +3140,35 @@ async def ask_claude(user_message, bot=None, chat_id=None,
     else:
         text_for_db = user_message
 
-    db.add_message("user", text_for_db, channel=channel)
-
-    # Auto-trigger: same question asked 3+ times (text-only, Telegram)
-    if channel == "telegram" and isinstance(user_message, str):
-        q_key = _hash_question(user_message)
-        _question_counts[q_key] = _question_counts.get(q_key, 0) + 1
-        if _question_counts[q_key] == 3:
-            db.add_suggestion(
-                description=f"Talha has asked the same question 3 times: \"{user_message[:120]}\"",
-                reason="Repeated questions may mean this should be a scheduled report or a faster command",
-                priority="Medium",
-            )
-
-    messages = db.get_recent_messages(limit=20, channel=channel)
-
-    # For multimodal content, replace the last stored user message with the full content list
-    if isinstance(user_message, list) and messages and messages[-1]["role"] == "user":
-        messages[-1] = {"role": "user", "content": user_message}
+    # Web channel: use per-user admin_conversations — never the shared conversation_history
+    if channel == "web" and sender_username:
+        history = db.get_admin_conversation(sender_username, limit=20)
+        messages = []
+        for h in history:
+            role = "user" if h["direction"] == "inbound" else "assistant"
+            messages.append({"role": role, "content": h["message_content"]})
+        # Append current message (not yet logged by /api/chat endpoint)
+        if isinstance(user_message, list):
+            messages.append({"role": "user", "content": user_message})
+        else:
+            messages.append({"role": "user", "content": text_for_db})
+    else:
+        # Telegram / shortcut / team channels: use shared conversation_history
+        db.add_message("user", text_for_db, channel=channel)
+        # Auto-trigger: same question asked 3+ times (text-only, Telegram)
+        if channel == "telegram" and isinstance(user_message, str):
+            q_key = _hash_question(user_message)
+            _question_counts[q_key] = _question_counts.get(q_key, 0) + 1
+            if _question_counts[q_key] == 3:
+                db.add_suggestion(
+                    description=f"Talha has asked the same question 3 times: \"{user_message[:120]}\"",
+                    reason="Repeated questions may mean this should be a scheduled report or a faster command",
+                    priority="Medium",
+                )
+        messages = db.get_recent_messages(limit=20, channel=channel)
+        # For multimodal content, replace the last stored user message with the full content list
+        if isinstance(user_message, list) and messages and messages[-1]["role"] == "user":
+            messages[-1] = {"role": "user", "content": user_message}
 
     response_text = ""
     try:
@@ -3220,7 +3231,10 @@ async def ask_claude(user_message, bot=None, chat_id=None,
         log.error("ask_claude: rate limit exhausted after all retries")
         response_text = "I've hit Anthropic's API rate limit. Wait a minute and try again."
 
-    db.add_message("assistant", response_text, channel=channel)
+    # Web channel: admin_conversations is the authoritative store (written by /api/chat)
+    # Only write to shared conversation_history for non-web channels
+    if channel != "web" or not sender_username:
+        db.add_message("assistant", response_text, channel=channel)
     return response_text
 
 
