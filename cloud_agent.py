@@ -1149,12 +1149,53 @@ TOOLS = [
             "required": ["accounts"],
         },
     },
+    {
+        "name": "set_reminder",
+        "description": (
+            "Set a scheduled reminder for yourself or a team member. "
+            "Donna will send a WhatsApp message and web notification at the scheduled time. "
+            "Use this when anyone says 'remind me', 'remind X', 'set a reminder', etc. "
+            "Resolve relative times (tomorrow, in 2 hours, next Monday at 9am) to absolute "
+            "KSA datetime using the current date/time from the system prompt. "
+            "For team members, look up their name from the team roster in the system prompt."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_name": {
+                    "type": "string",
+                    "description": "Full name of who the reminder is FOR. Use 'self' if for the user themselves."
+                },
+                "reminder_text": {
+                    "type": "string",
+                    "description": "The reminder message to send. Clear and actionable."
+                },
+                "scheduled_at": {
+                    "type": "string",
+                    "description": "KSA datetime when to send the reminder. Format: YYYY-MM-DD HH:MM:00"
+                },
+                "target_whatsapp": {
+                    "type": "string",
+                    "description": "WhatsApp number of the target (with + prefix). Required if target is a team member."
+                },
+                "target_username": {
+                    "type": "string",
+                    "description": "Donna username of the target if known (email address). Leave empty if unknown."
+                },
+                "notify_setter": {
+                    "type": "boolean",
+                    "description": "If true, also notify the person who set this reminder when it fires. Default true when setting for someone else."
+                },
+            },
+            "required": ["target_name", "reminder_text", "scheduled_at"],
+        },
+    },
 ]
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
 
-async def _execute_tool(name, inputs, bot=None, chat_id=None):
+async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha'):
     try:
         _tool_failure_counts[name] = 0  # reset on successful entry
         if name == "get_overdue_invoices":
@@ -3000,6 +3041,42 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None):
                 lines.append("")
             return "\n".join(lines)
 
+        elif name == "set_reminder":
+            from datetime import datetime as _dt
+            t_name  = inputs.get("target_name", "").strip()
+            r_text  = inputs.get("reminder_text", "").strip()
+            sched   = inputs.get("scheduled_at", "").strip()
+            t_wa    = inputs.get("target_whatsapp") or None
+            t_user  = inputs.get("target_username") or None
+            n_set   = 1 if inputs.get("notify_setter", True) else 0
+            # Normalise datetime format
+            sched = sched.replace("T", " ")[:19]
+            try:
+                _dt.strptime(sched, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return f"Invalid scheduled_at: '{sched}'. Use YYYY-MM-DD HH:MM:00"
+            # Resolve "self" to sender_name
+            if t_name.lower() in ("self", "me"):
+                t_name = sender_name
+                n_set  = 0
+            rid = db.add_reminder(
+                created_by=sender_name,
+                target_name=t_name,
+                reminder_text=r_text,
+                scheduled_at=sched,
+                target_whatsapp=t_wa,
+                target_username=t_user,
+                notify_setter=n_set,
+            )
+            confirm = (
+                f"Reminder #{rid} set for **{t_name}** at {sched} KSA.\n"
+                f"Message: \u201c{r_text}\u201d\n"
+                f"Delivery: WhatsApp{' + web notification' if t_user else ''}."
+            )
+            if n_set:
+                confirm += " I'll also confirm to you when it fires."
+            return confirm
+
         else:
             db.add_suggestion(
                 description=f"New tool capability needed: '{name}'",
@@ -3116,7 +3193,7 @@ async def ask_claude(user_message, bot=None, chat_id=None,
             tool_results = []
             for tc in tool_calls:
                 log.info("Tool: %s(%s)", tc.name, tc.input)
-                result = await _execute_tool(tc.name, tc.input, bot=bot, chat_id=chat_id)
+                result = await _execute_tool(tc.name, tc.input, bot=bot, chat_id=chat_id, sender_name=sender_name)
                 log.info("Result: %s", result[:150])
                 tool_results.append({
                     "type": "tool_result",
@@ -4617,6 +4694,54 @@ async def job_takeover_expiry(app):
                 log.error('Takeover expiry error for %s: %s', esc['phone_number'], _te)
     except Exception as e:
         log.error('job_takeover_expiry failed: %s', e)
+
+async def job_check_reminders(app):
+    """Fire due reminders: send WhatsApp + web notification."""
+    due = db.get_pending_reminders()
+    if not due:
+        return
+    for rem in due:
+        try:
+            text = f"\u23f0 Reminder: {rem['reminder_text']}"
+            # WhatsApp to target
+            if rem.get("target_whatsapp"):
+                try:
+                    erp.send_whatsapp(rem["target_whatsapp"], text)
+                except Exception as _we:
+                    log.warning("Reminder WA failed for %s: %s", rem["target_whatsapp"], _we)
+            # Web notification to target (if they have a donna account)
+            db.add_notification(
+                title="Reminder",
+                body=rem["reminder_text"],
+                category="reminder",
+            )
+            # Notify setter if different from target
+            if rem.get("notify_setter") and rem["created_by"] != rem.get("target_username", ""):
+                _setter_wa = None
+                for w in CONFIG.get("communication", {}).get("whatsapp_whitelist", []):
+                    if w.get("name", "").lower() == rem["created_by"].lower():
+                        _setter_wa = w.get("number")
+                        break
+                if not _setter_wa:
+                    try:
+                        _u = db.get_donna_user(rem["created_by"])
+                        if _u:
+                            _setter_wa = _u.get("whatsapp_number")
+                    except Exception:
+                        pass
+                if _setter_wa:
+                    try:
+                        erp.send_whatsapp(
+                            _setter_wa,
+                            f"\u2705 Reminder sent to {rem['target_name']}: {rem['reminder_text']}"
+                        )
+                    except Exception as _se:
+                        log.debug("Setter notify WA failed: %s", _se)
+            db.mark_reminder_sent(rem["id"])
+            log.info("Reminder #%d fired for %s", rem["id"], rem["target_name"])
+        except Exception as _re:
+            log.error("Reminder #%d failed: %s", rem["id"], _re)
+
 
 async def job_whatsapp_inbound_poll(app):
     """Every 2 minutes — poll ERPNext for new incoming WhatsApp messages."""
@@ -6365,6 +6490,10 @@ def main():
             "interval", minutes=5, id="escalation_check",
         )
         scheduler.add_job(
+            lambda: _run(lambda: job_check_reminders(app)),
+            "interval", minutes=1, id="reminder_check",
+        )
+        scheduler.add_job(
             lambda: _run(lambda: job_takeover_expiry(app)),
             "interval", minutes=30, id="takeover_expiry",
         )
@@ -6396,7 +6525,7 @@ def main():
             "team_reminders(9:30am daily) | team_accountability(mon 8:30am) | "
             "monthly_pl(1st 9am) | refresh_coa(sun 11pm) | "
             "whatsapp_poll(5min-fallback) | email_check(30min) | delivery_check(10min) | takeover_expiry(30min) | "
-            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA) | erp_contact_sync(2am)"
+            "sla_check(8:45am+5pm) | old_tickets_digest(mon 9am) | morning_briefing(8:30am) | escalation_check(5min) | reminder_check(1min) | eod_request(4:30pm KSA) | eod_summary(4:55pm KSA) | erp_contact_sync(2am)"
         )
 
     async def post_shutdown(app):

@@ -221,6 +221,7 @@ const TOOLS=[
     {id:'send_email',   label:'Send Email'},
     {id:'my_email',     label:'My Email Inbox'},
     {id:'calendar',     label:'Calendar'},
+    {id:'reminders',    label:'Reminders'},
   ]},
   {section:'System',adminOnly:true,items:[
     {id:'donna_suggestions',label:'Suggestions Log'},
@@ -1078,6 +1079,180 @@ function GmailConnectModal({onClose,onConnected}){
 }
 
 
+
+function RemindersPanel({onClose,loggedIn}){
+  const [reminders,setReminders]=React.useState(null);
+  const [filter,setFilter]=React.useState('pending');
+  const [cancelling,setCancelling]=React.useState(null);
+
+  const load=()=>{
+    setReminders(null);
+    authFetch('/api/reminders').then(d=>{if(d)setReminders(d.reminders||[]);}).catch(()=>setReminders([]));
+  };
+  React.useEffect(load,[]);
+
+  const cancel=async(id)=>{
+    setCancelling(id);
+    await authFetch(`/api/reminders/${id}`,{method:'DELETE'}).catch(()=>null);
+    setCancelling(null);
+    load();
+  };
+
+  const statusColors={
+    pending:'var(--teal)',sent:'var(--text-3)',cancelled:'var(--red)',failed:'var(--amber)'
+  };
+  const statusIcons={pending:'⏰',sent:'✓',cancelled:'✕',failed:'⚠'};
+
+  const filtered=(reminders||[]).filter(r=>filter==='all'||r.status===filter);
+
+  const fmtDt=(s)=>{
+    if(!s)return '';
+    const d=new Date(s.replace(' ','T'));
+    return d.toLocaleString('en-SA',{weekday:'short',month:'short',day:'numeric',
+      hour:'2-digit',minute:'2-digit',hour12:true});
+  };
+
+  const isAdmin=loggedIn?.role==='admin';
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:520,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  const tabStyle=(active)=>({
+    padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer',border:'none',
+    background:active?'var(--teal)':'var(--bg2)',
+    color:active?'#000':'var(--text-3)',transition:'all 0.15s',
+  });
+
+  const pending=(reminders||[]).filter(r=>r.status==='pending').length;
+
+  return <div style={panelStyle}>
+    {/* Header */}
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',flexShrink:0}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{fontSize:18}}>⏰</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)'}}>Reminders</div>
+            <div style={{fontSize:11,color:'var(--text-3)'}}>
+              {isAdmin?'All users':'Your reminders'}
+              {pending>0&&<span style={{marginLeft:8,background:'var(--teal)',color:'#000',
+                borderRadius:8,padding:'1px 7px',fontSize:10,fontWeight:700}}>{pending} pending</span>}
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button onClick={load} title="Refresh" style={{background:'none',border:'1px solid var(--border)',
+            borderRadius:6,padding:'5px 10px',color:'var(--text-3)',cursor:'pointer',fontSize:12}}>↻</button>
+          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',
+            cursor:'pointer',fontSize:18,padding:4}}>✕</button>
+        </div>
+      </div>
+      {/* Filter tabs */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+        {['pending','sent','cancelled','all'].map(f=>(
+          <button key={f} onClick={()=>setFilter(f)} style={tabStyle(filter===f)}>
+            {f.charAt(0).toUpperCase()+f.slice(1)}
+            {f==='pending'&&pending>0&&` (${pending})`}
+          </button>
+        ))}
+      </div>
+    </div>
+
+    {/* List */}
+    <div style={{flex:1,overflowY:'auto'}}>
+      {reminders===null&&(
+        <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>Loading…</div>
+      )}
+      {reminders!==null&&filtered.length===0&&(
+        <div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>
+          No {filter==='all'?'':filter} reminders
+        </div>
+      )}
+      {filtered.map(r=>{
+        const isPending=r.status==='pending';
+        const isMine=r.created_by===loggedIn?.username;
+        const isForMe=r.target_username===loggedIn?.username;
+        return <div key={r.id} style={{
+          padding:'14px 20px',borderBottom:'1px solid var(--border)',
+          background:isPending?'transparent':'var(--bg0)',
+          transition:'background 0.2s',
+        }}>
+          <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+            {/* Status icon */}
+            <div style={{
+              width:36,height:36,borderRadius:10,flexShrink:0,
+              background:isPending?'var(--teal-dim)':'var(--bg3)',
+              border:`1px solid ${statusColors[r.status]||'var(--border)'}`,
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:16,
+            }}>
+              {statusIcons[r.status]||'⏰'}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              {/* Reminder text */}
+              <div style={{fontSize:13,fontWeight:600,color:isPending?'var(--text-1)':'var(--text-3)',
+                lineHeight:1.4,marginBottom:5}}>
+                {r.reminder_text}
+              </div>
+              {/* Meta row */}
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:4}}>
+                {/* Target */}
+                <span style={{display:'inline-flex',alignItems:'center',gap:4,
+                  background:'var(--bg3)',borderRadius:5,padding:'2px 8px',fontSize:11,color:'var(--text-2)'}}>
+                  👤 {r.target_name}
+                </span>
+                {/* Setter (admin view or if set by someone else) */}
+                {(isAdmin||!isMine)&&r.created_by&&r.created_by!==r.target_name&&(
+                  <span style={{display:'inline-flex',alignItems:'center',gap:4,
+                    background:'var(--bg3)',borderRadius:5,padding:'2px 8px',fontSize:11,color:'var(--text-3)'}}>
+                    ✍️ by {r.created_by}
+                  </span>
+                )}
+                {/* Status badge */}
+                <span style={{display:'inline-flex',alignItems:'center',gap:4,
+                  background:isPending?'var(--teal-dim)':'var(--bg3)',
+                  borderRadius:5,padding:'2px 8px',fontSize:11,
+                  color:statusColors[r.status]||'var(--text-3)',fontWeight:600}}>
+                  {r.status}
+                </span>
+              </div>
+              {/* Datetime */}
+              <div style={{fontSize:11,color:isPending?'var(--teal)':'var(--text-3)',
+                fontFamily:'var(--mono)',marginBottom:r.sent_at?4:0}}>
+                📅 {fmtDt(r.scheduled_at)}
+              </div>
+              {r.sent_at&&(
+                <div style={{fontSize:10,color:'var(--text-3)',fontFamily:'var(--mono)'}}>
+                  Sent at {fmtDt(r.sent_at)}
+                </div>
+              )}
+            </div>
+            {/* Cancel button */}
+            {isPending&&(isMine||isForMe||isAdmin)&&(
+              <button
+                onClick={()=>cancel(r.id)}
+                disabled={cancelling===r.id}
+                title="Cancel reminder"
+                style={{flexShrink:0,background:'none',border:'1px solid var(--border)',
+                  borderRadius:6,padding:'5px 10px',fontSize:11,color:'var(--red)',
+                  cursor:'pointer',opacity:cancelling===r.id?0.5:1,whiteSpace:'nowrap'}}>
+                {cancelling===r.id?'…':'Cancel'}
+              </button>
+            )}
+          </div>
+        </div>;
+      })}
+    </div>
+
+    {/* Footer */}
+    <div style={{padding:'10px 20px',borderTop:'1px solid var(--border)',flexShrink:0,
+      fontSize:11,color:'var(--text-3)'}}>
+      Say "remind me tomorrow at 9am to..." or "remind Khayam at 3pm to..." in the chat.
+    </div>
+  </div>;
+}
+
 function CalendarPanel({onClose}){
   const [events,setEvents]=React.useState(null);
   const [showCreate,setShowCreate]=React.useState(false);
@@ -1872,6 +2047,7 @@ function App(){
   const [showEmailInbox,setShowEmailInbox]=useState(false);
   const [showGmailConnect,setShowGmailConnect]=useState(false);
   const [showCalendar,setShowCalendar]=useState(false);
+  const [showReminders,setShowReminders]=useState(false);
   const [ticketDraft,setTicketDraft]=useState(null); // {phone,text}
   const [coachingQ,setCoachingQ]=useState('');
   const [coachingA,setCoachingA]=useState('');
@@ -2242,6 +2418,7 @@ function App(){
     if(toolId==='role_perms'){setShowRolePerms(true);setToolsOpen(false);return;}
     if(toolId==='my_email'){setShowEmailInbox(true);setToolsOpen(false);return;}
     if(toolId==='calendar'){setShowCalendar(true);setToolsOpen(false);return;}
+    if(toolId==='reminders'){setShowReminders(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
     setActiveTool(toolId);
@@ -2539,6 +2716,7 @@ function App(){
   {showComposer&&<OutboundWAComposer onClose={()=>setShowComposer(false)} onSent={()=>{}}/>}
   {showEmailInbox&&<EmailInboxPanel onClose={()=>setShowEmailInbox(false)} loggedIn={loggedIn}/>}
   {showCalendar&&<CalendarPanel onClose={()=>setShowCalendar(false)}/>}
+  {showReminders&&<RemindersPanel onClose={()=>setShowReminders(false)} loggedIn={loggedIn}/>}
   {ticketDraft&&<TicketDraftPanel phone={ticketDraft.phone} initialText={ticketDraft.text} onClose={()=>setTicketDraft(null)}/>}
   {showNotifPanel&&<div style={{
     position:'fixed',top:52,right:16,width:320,maxWidth:'calc(100vw - 32px)',

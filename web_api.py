@@ -129,6 +129,14 @@ async def require_manager(session=Depends(_verify_token)):
     return session
 
 
+def _has_permission(session: dict, permission: str) -> bool:
+    try:
+        _check_permission(session, permission)
+        return True
+    except Exception:
+        return False
+
+
 def _check_permission(session: dict, permission: str):
     """Raise 403 if session user lacks permission. Falls back to role_permissions table."""
     username = session.get("username", "")
@@ -1596,6 +1604,7 @@ ALL_PERMISSIONS = [
     "manage_settings", "view_customers", "chat_customers", "send_whatsapp",
     "claim_conversation", "view_eod_summary", "view_calendar", "view_email",
     "escalate_tickets", "view_team_chat", "send_email_draft",
+    "view_all_reminders",
 ]
 
 PERMISSION_LABELS = {
@@ -1614,6 +1623,7 @@ PERMISSION_LABELS = {
     "escalate_tickets":   "Escalate support tickets",
     "view_team_chat":     "View team WhatsApp conversations",
     "send_email_draft":   "Draft & send emails (with approval)",
+    "view_all_reminders": "View all reminders from every user (admin only)",
 }
 
 @app.get("/api/permissions")
@@ -1802,6 +1812,31 @@ async def create_ticket_from_chat(body: TicketCreateBody, session=Depends(requir
         return {"ok": True, "ticket_name": ticket_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Reminders ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/reminders")
+async def list_reminders_api(session=Depends(require_auth)):
+    """Return reminders visible to this user. Admins see all."""
+    username = session.get("username", "")
+    try:
+        view_all = _has_permission(session, "view_all_reminders")
+        reminders = db.get_reminders(username, view_all=view_all)
+        return {"reminders": reminders, "count": len(reminders)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/reminders/{reminder_id}")
+async def cancel_reminder_api(reminder_id: int, session=Depends(require_auth)):
+    """Cancel a pending reminder. Creator, target, or admin only."""
+    username = session.get("username", "")
+    is_admin = session.get("role") == "admin"
+    ok = db.cancel_reminder(reminder_id, username, is_admin=is_admin)
+    if not ok:
+        raise HTTPException(status_code=403, detail="Not found or not authorised")
+    return {"ok": True}
 
 
 # ── Outbound WhatsApp Composer ────────────────────────────────────────────────

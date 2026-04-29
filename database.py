@@ -85,6 +85,23 @@ def init_db():
                 error               TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS reminders (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_by       TEXT NOT NULL,
+                target_name      TEXT NOT NULL,
+                target_whatsapp  TEXT,
+                target_username  TEXT,
+                reminder_text    TEXT NOT NULL,
+                scheduled_at     TEXT NOT NULL,
+                status           TEXT DEFAULT 'pending',
+                sent_at          TEXT,
+                notify_setter    INTEGER DEFAULT 0,
+                calendar_added   INTEGER DEFAULT 0,
+                created_at       TEXT DEFAULT (datetime('now', '+3 hours'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_rem_status ON reminders(status, scheduled_at);
+            CREATE INDEX IF NOT EXISTS idx_rem_user ON reminders(created_by, target_username);
+
             CREATE TABLE IF NOT EXISTS suggestions (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 description      TEXT NOT NULL,
@@ -2017,6 +2034,76 @@ def list_user_integrations(username: str) -> list:
             "SELECT integration, email_address, connected_at FROM user_integrations WHERE username=?",
             (username,)
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_reminder(created_by: str, target_name: str, reminder_text: str,
+                    scheduled_at: str, target_whatsapp: str = None,
+                    target_username: str = None, notify_setter: int = 0) -> int:
+    """Insert a new reminder. Returns the new row id."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO reminders
+               (created_by, target_name, target_whatsapp, target_username,
+                reminder_text, scheduled_at, notify_setter)
+               VALUES (?,?,?,?,?,?,?)""",
+            (created_by, target_name, target_whatsapp, target_username,
+             reminder_text, scheduled_at, notify_setter)
+        )
+        return cur.lastrowid
+
+
+def get_pending_reminders() -> list:
+    """Return reminders due to fire (scheduled_at <= now KSA, status=pending)."""
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM reminders
+               WHERE status='pending'
+               AND scheduled_at <= datetime('now', '+3 hours')
+               ORDER BY scheduled_at ASC"""
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_reminder_sent(reminder_id: int):
+    with _conn() as conn:
+        conn.execute(
+            """UPDATE reminders SET status='sent',
+               sent_at=datetime('now', '+3 hours') WHERE id=?""",
+            (reminder_id,)
+        )
+
+
+def cancel_reminder(reminder_id: int, requesting_user: str, is_admin: bool = False) -> bool:
+    """Cancel a pending reminder. Only creator/target or admin can cancel."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id=? AND status='pending'", (reminder_id,)
+        ).fetchone()
+        if not row:
+            return False
+        r = dict(row)
+        if not is_admin and r["created_by"] != requesting_user and r.get("target_username") != requesting_user:
+            return False
+        conn.execute("UPDATE reminders SET status='cancelled' WHERE id=?", (reminder_id,))
+    return True
+
+
+def get_reminders(username: str, view_all: bool = False) -> list:
+    """Return reminders visible to this user based on their access level."""
+    with _conn() as conn:
+        if view_all:
+            rows = conn.execute(
+                """SELECT * FROM reminders
+                   ORDER BY scheduled_at ASC""",
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM reminders
+                   WHERE created_by=? OR target_username=?
+                   ORDER BY scheduled_at ASC""",
+                (username, username)
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
