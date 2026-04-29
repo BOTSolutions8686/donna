@@ -3526,9 +3526,16 @@ async def job_eod_report_request(app):
                 db.clear_eod_session(wa)
             db.set_eod_session(wa, 'collecting', f"Donna: {opener}")
             db.log_daily_report_prompt(name, wa, _today)
-            erp.send_whatsapp(wa, opener)
-            db.log_team_conversation(name, wa, 'outbound', opener)
-            log.info('EOD check-in sent to %s', name)
+            _eod_status = wa_send_safe(wa, opener)
+            if _eod_status == 'template_sent':
+                log.info('EOD: 24h window closed for %s — template sent to re-open session', name)
+                db.update_daily_report_status(wa, _today, 'window_closed')
+                # Message is queued via pending_state; will fire when they reply to template
+            elif _eod_status == 'failed':
+                log.warning('EOD: send failed for %s (%s)', name, wa)
+                db.update_daily_report_status(wa, _today, 'send_failed')
+            else:
+                log.info('EOD check-in sent to %s', name)
         except Exception as e:
             log.error('EOD request failed for %s: %s', name, e)
 
@@ -4509,7 +4516,7 @@ def _business_hours_message(lang: str = 'en') -> str:
             "We'll get back to you during business hours.")
 
 
-CHAT_START_TEMPLATE = "chat_start-en"
+CHAT_START_TEMPLATE = "chat_start"
 
 
 def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = None) -> str:

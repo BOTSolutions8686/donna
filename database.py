@@ -1781,6 +1781,15 @@ def save_daily_report(whatsapp_number: str, member_name: str, report_date: str,
         )
 
 
+def update_daily_report_status(whatsapp_number: str, report_date: str, status: str):
+    """Update the status of a daily report record."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE daily_reports SET status=? WHERE whatsapp_number=? AND report_date=?",
+            (status, whatsapp_number, report_date)
+        )
+
+
 def log_daily_report_prompt(member_name: str, whatsapp_number: str, report_date: str):
     """Record that a prompt was sent to a member — creates/updates row with status='prompted'."""
     from datetime import datetime
