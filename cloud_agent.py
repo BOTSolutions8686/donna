@@ -4709,11 +4709,18 @@ async def job_check_reminders(app):
                     erp.send_whatsapp(rem["target_whatsapp"], text)
                 except Exception as _we:
                     log.warning("Reminder WA failed for %s: %s", rem["target_whatsapp"], _we)
-            # Web notification to target (if they have a donna account)
+            # Web + PWA push notification to target
             db.add_notification(
                 title="Reminder",
                 body=rem["reminder_text"],
                 category="reminder",
+            )
+            asyncio.get_event_loop().create_task(
+                send_push_notification(
+                    title=f"⏰ Reminder for {rem['target_name']}",
+                    body=rem["reminder_text"],
+                    tag="reminder",
+                )
             )
             # Notify setter if different from target
             if rem.get("notify_setter") and rem["created_by"] != rem.get("target_username", ""):
