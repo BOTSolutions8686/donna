@@ -607,12 +607,12 @@ TOOLS = [
     },
     {
         "name": "add_suggestion",
-        "description": "Log a new self-improvement suggestion — use this when Donna notices a gap, a missing capability, or something that keeps failing.",
+        "description": ("Log a suggestion, issue, or feedback — use this when ANY user reports a problem, missing feature, bug, or improvement idea, OR when Donna notices a gap or capability missing. Always use this tool when someone says 'log this', 'add a suggestion', 'report an issue', 'note this down', or similar. Capture the reporter's name in the reason field."),
         "input_schema": {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "What the suggestion is"},
-                "reason": {"type": "string", "description": "Why it matters or what triggered it"},
+                "description": {"type": "string", "description": "What the suggestion is or the issue being reported"},
+                "reason": {"type": "string", "description": "Why it matters, what triggered it, and who reported it"},
                 "priority": {"type": "string", "enum": ["Low", "Medium", "High"], "description": "Default: Medium"},
             },
             "required": ["description"],
@@ -2294,6 +2294,7 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                 description=inputs["description"],
                 reason=inputs.get("reason", ""),
                 priority=inputs.get("priority", "Medium"),
+                submitted_by=sender_name,
             )
             return f"Suggestion logged: \"{inputs['description']}\""
 
@@ -3157,8 +3158,9 @@ async def ask_claude(user_message, bot=None, chat_id=None,
                 "get_payables_summary", "get_collections_tracker", "get_payment_patterns",
                 "get_daily_financial", "get_sales_summary", "get_gl_summary",
             }
+            _ALWAYS_AVAILABLE = {"add_suggestion", "set_reminder"}
             if sender_role in ("support", "viewer"):
-                _allowed_tools = [t for t in TOOLS if t.get("name") not in _FINANCIAL_TOOLS]
+                _allowed_tools = [t for t in TOOLS if t.get("name") not in _FINANCIAL_TOOLS or t.get("name") in _ALWAYS_AVAILABLE]
                 _role_suffix = (
                     "\n\nThe person logged in and talking to you right now is " + sender_name +
                     " (role: " + sender_role + "). You know exactly who they are."

@@ -109,7 +109,8 @@ def init_db():
                 priority         TEXT DEFAULT 'Medium',
                 date_noticed     TEXT DEFAULT (date('now')),
                 status           TEXT DEFAULT 'open',
-                implemented_date TEXT
+                implemented_date TEXT,
+                submitted_by     TEXT DEFAULT 'donna'
             );
 
             CREATE TABLE IF NOT EXISTS collections_tracker (
@@ -508,7 +509,7 @@ def get_active_escalations():
     return [dict(r) for r in rows]
 
 
-def add_suggestion(description, reason="", priority="Medium"):
+def add_suggestion(description, reason="", priority="Medium", submitted_by="donna"):
     """Add a suggestion if no open one with the same description prefix already exists."""
     prefix = description[:80]
     with _conn() as conn:
@@ -518,8 +519,8 @@ def add_suggestion(description, reason="", priority="Medium"):
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO suggestions (description, reason, priority) VALUES (?,?,?)",
-                (description, reason, priority),
+                "INSERT INTO suggestions (description, reason, priority, submitted_by) VALUES (?,?,?,?)",
+                (description, reason, priority, submitted_by),
             )
 
 
@@ -960,6 +961,10 @@ def _migrate_db():
             conn.execute("ALTER TABLE team_conversations ADD COLUMN sent_wa_message_name TEXT")
         if 'delivery_status' not in cols:
             conn.execute("ALTER TABLE team_conversations ADD COLUMN delivery_status TEXT")
+        # suggestions.submitted_by migration
+        sg_cols = [r[1] for r in conn.execute("PRAGMA table_info(suggestions)").fetchall()]
+        if 'submitted_by' not in sg_cols:
+            conn.execute("ALTER TABLE suggestions ADD COLUMN submitted_by TEXT DEFAULT 'donna'")
         # customer_conversations delivery_status
         cc_cols = [r[1] for r in conn.execute("PRAGMA table_info(customer_conversations)").fetchall()]
         if 'delivery_status' not in cc_cols:
