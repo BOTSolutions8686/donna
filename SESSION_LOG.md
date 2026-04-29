@@ -1229,3 +1229,100 @@ e06489d fix: mobile keyboard pushes send button off-screen (#29)
 - [ ] Gmail OAuth: create Desktop app credential in Google Cloud Console; update config to use `device_client_id` / `device_client_secret` separate from admin calendar credentials
 - [ ] Quotations tool in ERPNext (suggestion #25, removed from log but still valid)
 - [ ] Scheduled WhatsApp/email reminders (suggestion #16/17)
+
+---
+
+## Session: 2026-04-29 — Reminders, EOD overhaul, unified conversation flow, coaching
+
+### Summary
+Feature-heavy session covering: full reminders system, EOD collection fixes and new UI, unified Take Over flow replacing Intervene+Claim, per-thread coaching panel, role gating for EOD/team, suggestions tool for all users, mobile keyboard fix followup bugs.
+
+### Features built
+
+**Reminders tool (cloud_agent.py, database.py, web_api.py, Donna.html)**
+- `reminders` table: id, created_by, target_name, target_whatsapp, target_username, reminder_text, scheduled_at, status, sent_at, notify_setter, calendar_added
+- `set_reminder` Claude tool: resolves natural language times from system prompt context, auto-populates target WhatsApp from whitelist by name match, handles "self"/"me"
+- `job_check_reminders`: runs every 60 seconds, fires WhatsApp + `add_notification()` + targeted PWA push (per-user, not broadcast) for each due reminder. Notifies setter when firing for someone else.
+- `GET /api/reminders`: role-aware — admin with `view_all_reminders` sees all, others see created_by=me OR target_username=me
+- `DELETE /api/reminders/{id}`: creator/target/admin only
+- RemindersPanel: slide-in with filter tabs (pending/sent/cancelled/all), colour-coded status icons, progress bar, cancel button, attribution for admin view
+- Bug fixes: push was broadcasting to all users instead of target only; WhatsApp not sent for self-reminders because Claude didn't look up the number — fixed at both tool handler and job_check_reminders level
+
+**Suggestions tool for all users**
+- `submitted_by` column added to suggestions table
+- `add_suggestion()` accepts and stores submitted_by
+- Tool description rewritten to be user-facing: triggers on "log this", "add a suggestion", "report an issue"
+- `_ALWAYS_AVAILABLE` set added: add_suggestion and set_reminder never filtered for any role
+
+**EOD system overhaul**
+- Fix 1: Before sending new check-in, detect if existing session has member content — finalise it first before resetting transcript. Prevents data loss when job fires multiple times.
+- Fix 2: Auto-finalise when first reply >= 40 words — skips unnecessary follow-up for comprehensive responses (covers Arslan-style detailed updates)
+- Fix 3: At 4:55pm force-finalise all open sessions: content → summarise, no content → scan inbound messages for day, nothing → save status=no_response
+- Fix 4: job_eod_summary covers all prompted members, not just those with report_text
+- DB helpers: `get_open_eod_sessions()`, `get_team_inbound_messages_for_date()`, `get_all_prompted_members_for_date()`
+- API guards: `/api/team/conversations/{id}` requires view_team_chat, `/api/reports/daily` and `/api/reports/member/{wa}` require view_eod_summary
+- `GET /api/reports/all-members?date=`: returns all team members with EOD status sorted by submission state
+- view_eod_summary and view_team_chat seeded: admin + manager only
+- TeamSection and ReportsSection gated to admin/manager in sidebar
+- EODPanel: split-screen slide-in with date picker, progress bar, member list with colour-coded status (submitted/no_response/pending/not_prompted), report detail pane with proper markdown bullet rendering
+- Arslan Hassan April 28 report retroactively generated and saved
+- EOD Reports added to Communication tools section (managerOnly)
+
+**Unified Take Over flow**
+- Removed `intervening` state entirely — replaced with claim-derived state from `activeCustomer.claimed_by` (DB-backed, polls every 30s)
+- `isMine` = claimed_by === my username → unlocks input, shows teal release bar
+- `isOthers` = claimed_by !== me → shows who has it, admin gets Override button
+- Unclaimed → "Take Over" button (calls /api/customers/{phone}/claim, refreshes customer list)
+- Release bar shows name + "Release →" button (calls release API)
+- Admin Override available when conversation is claimed by someone else
+- ClaimButton component removed — functionality absorbed into bottom bar
+- showReadOnly: team/report = always RO; customer = RO unless isMine
+- Intervene was local state (lost on refresh, didn't pause Donna, no conflict detection). Take Over is DB-backed — Donna truly pauses, persists across devices.
+
+**CoachingPanel (Ask Donna privately)**
+- 🧠 Ask Donna button in conversation header — always visible on customer threads regardless of claim state. Previously hidden inside the locked input section (invisible when Donna handles = always invisible).
+- Slide-in floating panel (position:fixed bottom-right, doesn't block conversation)
+- Last 5 inbound customer messages injected as context into API call
+- Per-thread state: `coachingState` dict keyed by threadId — switching customers preserves context
+- 5 quick-prompt chips: one-tap questions without typing
+- Custom question input with Enter-to-submit
+
+### Bug fixes
+
+| Commit | Fix |
+|---|---|
+| 8a9066e | Poll dedup wrong column (customer_phone vs phone_number) + NoneType crash + UTC→KSA timestamps |
+| 24b1fd5 | Auto-reply when human releases conversation |
+| fb22bbf | Delivery receipts, ticket-from-chat, job applicant type |
+| d3e6703 | Message scrambling — stable IDs, sortKey, sorted merges |
+| 3b64ff4 | Crash: welcome messages had numeric id:1, startsWith failed |
+| 06c5f31 | Cross-device sync (PWA↔Web), sortKey format mismatch, identity recognition for all users |
+| e06489d | Mobile keyboard — font-size 16px, Visual Viewport handler, interactive-widget meta |
+| 9f2a52a | Reminder push to wrong users; WhatsApp missing for self-reminders |
+| 78a85d7 | Blank screen from literal newlines inside JS template literals (Babel silent failure) |
+
+### Investigated (not implemented)
+
+**Gmail OAuth blocked**: `{"error":"invalid_client","error_description":"Invalid client type."}` — Google OAuth client in config is Web Application type. Device Authorization Flow requires Desktop app type. Needs new credential in Google Cloud Console.
+
+### Service state
+- `cloud_agent.service` — active, 22 scheduler jobs (added reminder_check every 1min)
+- All new endpoints active on port 8080
+
+### Commits this session
+```
+78a85d7 fix: blank screen from literal newlines inside JS template literals
+7a2a70e feat: unified Take Over flow + CoachingPanel with context and quick prompts
+3b6b328 feat: EOD system overhaul — role gating, fixed collection, new panel UI
+9f2a52a fix: reminder push sent to wrong users, WhatsApp missing for self-reminders
+001a992 feat: suggestions tool available to all users with reporter tracking
+96f5778 fix: add PWA push notification to reminder delivery
+722eadd feat: reminders tool — set, schedule, fire, and manage reminders
+```
+
+### What is next
+- [ ] Gmail OAuth: create Desktop app credential in Google Cloud Console; use device_client_id/device_client_secret config keys separate from calendar
+- [ ] Read incoming WhatsApp from team members (suggestion #26)
+- [ ] Capture unstructured EOD submissions — now partially addressed by auto-finalize, but proactive detection still valuable (suggestion #27)
+- [ ] Quotations tool in ERPNext (P4)
+- [ ] Scheduled WhatsApp/email reminders superseded by Reminders tool — mark P5 done

@@ -573,3 +573,52 @@ Add get_quotations tool to fetch RFQ/Quotation doctype from ERPNext. Talha has a
 
 ### P5 — Scheduled WhatsApp/email reminders
 Allow scheduling messages for future delivery (e.g. remind Baraa Monday 10am about EBC appointment). Needs APScheduler one-shot jobs stored in DB so they survive restarts.
+
+## Milestone 13 — Reminders, EOD overhaul, unified conversation flow (2026-04-29)
+
+### 13.1 — Reminders tool ✅ 2026-04-29
+set_reminder Claude tool with natural language time parsing, auto-WA lookup from whitelist.
+job_check_reminders every 60s: WhatsApp + add_notification + targeted PWA push (per-user).
+GET /api/reminders (role-aware), DELETE /api/reminders/{id} (owner/target/admin).
+view_all_reminders permission: admin only. RemindersPanel: filter tabs, status icons, cancel.
+Bug fixes: push was broadcasting to all users; self-reminders had no WA number resolved.
+
+### 13.2 — Suggestions tool for all users ✅ 2026-04-29
+submitted_by column added. Tool description rewritten to be user-facing.
+_ALWAYS_AVAILABLE set: add_suggestion and set_reminder never filtered for any role.
+
+### 13.3 — EOD system overhaul ✅ 2026-04-29
+- Session overwrite protection: finalise existing content before resetting transcript
+- Auto-finalise on first reply >= 40 words (covers Arslan-style responses)
+- Force-finalise at 4:55pm: content -> summarise, messages -> retroactive extract, nothing -> no_response
+- API guards on team/EOD endpoints, seeded as admin+manager only
+- GET /api/reports/all-members returns full team status for any date
+- EODPanel: split-screen, date picker, progress bar, colour-coded member list, markdown bullet render
+- Arslan Hassan April 28 report retroactively saved
+
+### 13.4 — Unified Take Over flow ✅ 2026-04-29
+Removed intervening (local-only state). Claim state derived from DB via activeCustomer.claimed_by.
+isMine -> input unlocked + release bar. isOthers -> shows handler name, admin Override.
+Unclaimed -> Take Over button (DB-backed, pauses Donna, visible to all devices).
+ClaimButton component removed.
+
+### 13.5 — CoachingPanel ✅ 2026-04-29
+Always-visible 🧠 Ask Donna button in conversation header (not inside locked input).
+Slide-in floating panel, last 5 customer messages as context, per-thread state, 5 quick prompts.
+
+## Updated Planned Items
+
+### P1 — Gmail OAuth Desktop app credential (BLOCKED on Google Cloud Console)
+Status: unchanged. Create Desktop app OAuth credential; add device_client_id/device_client_secret config keys.
+
+### P2 — Read incoming WhatsApp from team members (suggestion #26)
+Status: open.
+
+### P3 — Capture unstructured EOD (suggestion #27)
+Status: partially addressed by 13.3 auto-finalise and retroactive message scan. Proactive detection for mid-day unstructured messages still valuable.
+
+### P4 — Quotations tool in ERPNext
+Status: open.
+
+### P5 — Scheduled reminders
+Status: superseded by Milestone 13.1 (Reminders tool). Mark complete.
