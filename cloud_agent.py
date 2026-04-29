@@ -78,13 +78,15 @@ async def process_admin_query(question: str) -> str:
 
 # ── Web Push ──────────────────────────────────────────────────────────────────
 
-async def send_push_notification(title: str, body: str, url: str = '/', tag: str = 'donna', icon: str = '/icon.svg'):
-    """Send a Web Push notification to all active subscribers."""
+async def send_push_notification(title: str, body: str, url: str = '/', tag: str = 'donna', icon: str = '/icon.svg', username: str = None):
+    """Send a Web Push notification. If username is given, only sends to that user's devices."""
     push_cfg = CONFIG.get('push_notifications', {})
     private_key = push_cfg.get('vapid_private_key', '')
     if not private_key:
         return
     subs = db.get_all_push_subscriptions()
+    if username:
+        subs = [s for s in subs if s.get('user_name') == username]
     if not subs:
         return
     try:
@@ -3060,6 +3062,13 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
             if t_name.lower() in ("self", "me"):
                 t_name = sender_name
                 n_set  = 0
+            # Auto-populate target_whatsapp from whitelist if not provided
+            if not t_wa:
+                _t_lower = t_name.lower()
+                for _w in CONFIG.get("communication", {}).get("whatsapp_whitelist", []):
+                    if _w.get("name", "").lower() == _t_lower:
+                        t_wa = _w.get("number")
+                        break
             rid = db.add_reminder(
                 created_by=sender_name,
                 target_name=t_name,
@@ -4705,13 +4714,31 @@ async def job_check_reminders(app):
     for rem in due:
         try:
             text = f"\u23f0 Reminder: {rem['reminder_text']}"
+            # Resolve WhatsApp number if not stored
+            _target_wa = rem.get("target_whatsapp") or None
+            if not _target_wa:
+                _t_lower = (rem.get("target_name") or "").lower()
+                for _w in CONFIG.get("communication", {}).get("whatsapp_whitelist", []):
+                    if _w.get("name", "").lower() == _t_lower:
+                        _target_wa = _w.get("number")
+                        break
+                if not _target_wa and rem.get("target_username"):
+                    try:
+                        _du = db.get_donna_user(rem["target_username"])
+                        if _du:
+                            _target_wa = _du.get("whatsapp_number")
+                    except Exception:
+                        pass
             # WhatsApp to target
-            if rem.get("target_whatsapp"):
+            if _target_wa:
                 try:
-                    erp.send_whatsapp(rem["target_whatsapp"], text)
+                    erp.send_whatsapp(_target_wa, text)
                 except Exception as _we:
-                    log.warning("Reminder WA failed for %s: %s", rem["target_whatsapp"], _we)
-            # Web + PWA push notification to target
+                    log.warning("Reminder WA failed for %s: %s", _target_wa, _we)
+            else:
+                log.warning("Reminder #%d: no WhatsApp number for %s", rem["id"], rem["target_name"])
+            # Web + PWA push — only to the target user's devices
+            _target_user = rem.get("target_username") or None
             db.add_notification(
                 title="Reminder",
                 body=rem["reminder_text"],
@@ -4722,6 +4749,7 @@ async def job_check_reminders(app):
                     title=f"⏰ Reminder for {rem['target_name']}",
                     body=rem["reminder_text"],
                     tag="reminder",
+                    username=_target_user,
                 )
             )
             # Notify setter if different from target
