@@ -1313,6 +1313,7 @@ async def chat(body: ChatBody, session=Depends(require_auth)):
             channel="web",
             sender_name=_display,
             sender_role=_user_role,
+            sender_username=username,
         )
         try:
             db.log_admin_message(username, "inbound", body.message)
@@ -1332,9 +1333,9 @@ async def get_calendar_events(days: int = 7, session=Depends(require_auth)):
     _check_permission(session, "view_calendar")
     try:
         import google_client as _gc
+        _uname = session.get('username', '') if isinstance(session, dict) else ''
         if not _gc.google_configured(_uname):
             return {"events": [], "error": "Google account not connected. Connect via My Email Inbox."}
-        _uname = session.get('username', '') if isinstance(session, dict) else ''
         events = _gc.get_upcoming_events(days_ahead=days, max_results=30, username=_uname)
         return {"events": events}
     except Exception as e:
@@ -1355,9 +1356,9 @@ async def create_calendar_event(body: CalendarEventBody, session=Depends(require
     _check_permission(session, "view_calendar")
     try:
         import google_client as _gc
+        _uname2 = session.get('username', '') if isinstance(session, dict) else ''
         if not _gc.google_configured(_uname2):
             raise HTTPException(status_code=400, detail="Google account not connected. Connect via My Email Inbox.")
-        _uname2 = session.get('username', '') if isinstance(session, dict) else ''
         if body.with_meet:
             result = _gc.create_event_with_meet(
                 title=body.title,
