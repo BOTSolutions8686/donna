@@ -456,13 +456,10 @@ function CoachingPanel({threadId,customer,recentMsgs,coachingState,setCoachingSt
     // Build context from last 5 inbound messages
     const inbound=recentMsgs.filter(m=>m.from==='customer').slice(-5);
     const ctx=[
-      `Customer: ${customer?.name||threadId}`,
-      inbound.length>0?`Recent messages:
-${inbound.map(m=>'- '+m.text).join('
-')}`:null,
-      `My question: ${question}`,
-    ].filter(Boolean).join('
-');
+      'Customer: '+(customer?.name||threadId),
+      inbound.length>0?('Recent messages:\n'+inbound.map(function(m){return '- '+m.text;}).join('\n')):null,
+      'My question: '+question,
+    ].filter(Boolean).join('\n');
     const d=await authFetch('/api/chat',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:ctx}),
@@ -497,7 +494,7 @@ ${inbound.map(m=>'- '+m.text).join('
             style={{fontSize:11,padding:'4px 9px',borderRadius:16,cursor:'pointer',
               background:cs.q===q&&(cs.loading||cs.a)?'var(--teal)':'var(--bg3)',
               color:cs.q===q&&(cs.loading||cs.a)?'#000':'var(--text-2)',
-              border:`1px solid ${cs.q===q&&(cs.loading||cs.a)?'var(--teal)':'var(--border)'}`,
+              border:'1px solid '+(cs.q===q&&(cs.loading||cs.a)?'var(--teal)':'var(--border)'),
               fontWeight:cs.q===q&&(cs.loading||cs.a)?700:400,
               transition:'all 0.15s',opacity:cs.loading?0.6:1}}>
             {q}
@@ -2762,7 +2759,7 @@ function App(){
                   title="Ask Donna privately"
                   style={{padding:'2px 8px',borderRadius:4,
                     background:coachingOpen[activeThread]?'var(--teal-dim)':'var(--bg2)',
-                    border:`1px solid ${coachingOpen[activeThread]?'var(--teal)':'var(--border)'}`,
+                    border:'1px solid '+(coachingOpen[activeThread]?'var(--teal)':'var(--border)'),
                     color:coachingOpen[activeThread]?'var(--teal)':'var(--text-3)',
                     fontSize:10,cursor:'pointer',flexShrink:0,fontWeight:600}}>
                   🧠 Ask Donna
