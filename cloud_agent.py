@@ -3078,8 +3078,16 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                     if _w.get("name", "").lower() == _t_lower:
                         t_wa = _w.get("number")
                         break
+            # Resolve created_by to email username (not display name)
+            import google_client as _gc_rem
+            _creator_email = sender_username or _gc_rem._resolve_google_username(sender_name)
+            # Resolve target_username if not provided
+            if not t_user:
+                _t_email = _gc_rem._resolve_google_username(t_name)
+                if '@' in _t_email:
+                    t_user = _t_email
             rid = db.add_reminder(
-                created_by=sender_name,
+                created_by=_creator_email,
                 target_name=t_name,
                 reminder_text=r_text,
                 scheduled_at=sched,
@@ -3203,10 +3211,20 @@ async def ask_claude(user_message, bot=None, chat_id=None,
                     " (role: " + sender_role + "). You know exactly who they are."
                     " Address them by their first name. If they ask who they are or what their name is, tell them."
                 )
+            # Inject per-user preferences into system prompt
+            _user_prefs = ''
+            if sender_username:
+                try:
+                    _p = db.get_user_preferences(sender_username)
+                    if _p.get('persona_instructions', '').strip():
+                        _user_prefs = ('\n\nPERSONAL INSTRUCTIONS from ' + sender_name + ':\n'
+                                       + _p['persona_instructions'].strip())
+                except Exception:
+                    pass
             response = await _claude_create(
                 model=MODEL,
                 max_tokens=2048,
-                system=SYSTEM_PROMPT + "\n\nCurrent date and time: " + _riyadh_now() + _role_suffix,
+                system=SYSTEM_PROMPT + "\n\nCurrent date and time: " + _riyadh_now() + _role_suffix + _user_prefs,
                 tools=_allowed_tools,
                 messages=messages,
             )
@@ -3564,7 +3582,19 @@ async def job_eod_summary(app):
     # Force-finalise any sessions still open + retroactive scan for missed content
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     _ksa = _tz(_td(hours=3))
+    # Merge passive accumulators into real sessions before force-finalise
     _open_sessions = db.get_open_eod_sessions()
+    for _sess in _open_sessions:
+        _wa_s = _sess['whatsapp_number']
+        if _wa_s.endswith('_passive'):
+            # Promote passive accumulator to real session if no real session exists
+            _real_wa = _wa_s.replace('_passive', '')
+            _real = db.get_eod_session(_real_wa)
+            if not _real:
+                db.set_eod_session(_real_wa, 'collecting', _sess.get('transcript', ''))
+                db.clear_eod_session(_wa_s)
+    _open_sessions = [s for s in db.get_open_eod_sessions()
+                      if not s['whatsapp_number'].endswith('_passive')]
     for _sess in _open_sessions:
         _wa = _sess['whatsapp_number']
         _transcript = _sess.get('transcript') or ''
@@ -3673,8 +3703,27 @@ async def ask_claude_team_conversational(sender_number: str, sender_name: str, m
                      'work report', 'eod report', 'day report']
     _is_manual_eod_trigger = any(kw in _msg_lower for kw in _eod_keywords)
 
+    # Detect substantive work content — tag it into the EOD session if no session active
+    # This ensures mid-day updates (e.g. Arslan's detailed messages) are captured
+    _WORK_SIGNALS = ['completed', 'finished', 'fixed', 'deployed', 'working on',
+                     'in progress', 'updated', 'resolved', 'pushed', 'created',
+                     'ticket', 'invoice', 'client', 'issue', 'bug', 'feature',
+                     'مكتمل', 'انتهيت', 'عمل', 'مشكلة', 'تذكرة']
+    _word_count = len(message.split())
+    _has_work_content = (_word_count >= 25 or
+                         any(sig in _msg_lower for sig in _WORK_SIGNALS))
+    _existing_session = db.get_eod_session(sender_number)
+
+    if _has_work_content and not _existing_session and not _is_manual_eod_trigger:
+        # Substantive message outside any session — store in a passive EOD accumulator
+        _passive = db.get_eod_session(sender_number + '_passive')
+        _prev_transcript = (_passive.get('transcript') or '') if _passive else ''
+        db.set_eod_session(sender_number + '_passive', 'collecting',
+                           _prev_transcript + f'\nTeam: {message}')
+        log.debug('EOD passive capture: %s sent work content (%d words)', sender_name, _word_count)
+
     # If no active session but member manually triggered EOD → start one
-    if _is_manual_eod_trigger and not db.get_eod_session(sender_number):
+    if _is_manual_eod_trigger and not _existing_session:
         db.set_eod_session(sender_number, 'collecting', f'Donna: EOD check-in started')
         first_name = sender_name.split()[0]
         ack = f"Sure {first_name}, let's do your EOD check-in. What did you work on today?"
@@ -4809,6 +4858,7 @@ async def job_check_reminders(app):
                 title="Reminder",
                 body=rem["reminder_text"],
                 category="reminder",
+                username=rem.get("target_username") or "system",
             )
             asyncio.get_event_loop().create_task(
                 send_push_notification(
@@ -5080,6 +5130,7 @@ async def job_email_check(app):
                         title='New Email',
                         body=f'{len(_new2)} new email(s) in {_display2}',
                         category='email',
+                        username=_uname2,
                     )
                     for _m2 in _new2:
                         db.mark_email_processed(_m2['id'], _m2.get('threadId', ''), 'user_notified')
@@ -6209,7 +6260,12 @@ async def handle_whatsapp_webhook_verify(request: web.Request) -> web.Response:
     return web.Response(status=403, text='Forbidden')
 
 async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
-    """Receive inbound WhatsApp messages (Meta Cloud API native + legacy ERPNext relay)."""
+    """Legacy aiohttp handler — disabled. FastAPI on port 8080 is the active webhook path.
+    Returns 200 silently to avoid Meta retries if this port is ever reachable."""
+    return web.Response(status=200, text="ok")
+
+async def _handle_whatsapp_webhook_DISABLED(request: web.Request) -> web.Response:
+    """Original full handler — kept for reference only."""
     # Read body once for HMAC verification
     try:
         body_bytes = await request.read()
@@ -6421,11 +6477,13 @@ def main():
         except Exception as _rse:
             log.warning("Could not register WA sender: %s", _rse)
 
-        # Also start the aiohttp server on 8765 (kept as local fallback)
+        # aiohttp server on 8765 — kept running for health check only
+        # WhatsApp webhooks are handled exclusively by FastAPI on port 8080
+        # to avoid double-processing every inbound message
         await _webhook_runner.setup()
         site = web.TCPSite(_webhook_runner, "0.0.0.0", wa_port)
         await site.start()
-        log.info("WhatsApp webhook server listening on port %d", wa_port)
+        log.info("aiohttp health-check server listening on port %d (WA processing via FastAPI only)", wa_port)
 
         # Load Chart of Accounts into local cache on startup
         try:

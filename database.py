@@ -85,6 +85,12 @@ def init_db():
                 error               TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                username          TEXT PRIMARY KEY,
+                persona_instructions TEXT DEFAULT '',
+                updated_at        TEXT DEFAULT (datetime('now', '+3 hours'))
+            );
+
             CREATE TABLE IF NOT EXISTS reminders (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_by       TEXT NOT NULL,
@@ -243,7 +249,8 @@ def init_db():
                 body TEXT NOT NULL,
                 category TEXT DEFAULT 'info',
                 timestamp TEXT DEFAULT (datetime('now')),
-                read INTEGER DEFAULT 0
+                read INTEGER DEFAULT 0,
+                username TEXT DEFAULT 'system'
             );
 
             CREATE TABLE IF NOT EXISTS pending_context (
@@ -965,6 +972,10 @@ def _migrate_db():
         sg_cols = [r[1] for r in conn.execute("PRAGMA table_info(suggestions)").fetchall()]
         if 'submitted_by' not in sg_cols:
             conn.execute("ALTER TABLE suggestions ADD COLUMN submitted_by TEXT DEFAULT 'donna'")
+        # donna_notifications.username migration
+        dn_cols = [r[1] for r in conn.execute("PRAGMA table_info(donna_notifications)").fetchall()]
+        if 'username' not in dn_cols:
+            conn.execute("ALTER TABLE donna_notifications ADD COLUMN username TEXT DEFAULT 'system'")
         # customer_conversations delivery_status
         cc_cols = [r[1] for r in conn.execute("PRAGMA table_info(customer_conversations)").fetchall()]
         if 'delivery_status' not in cc_cols:
@@ -1308,7 +1319,9 @@ def get_conversation_thread(number, ticket_id=None, limit=20):
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT direction, team_member_name, message_content, timestamp, ticket_reference, conversation_thread_id "
+                "SELECT direction, team_member_name, message_content, "
+                "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp, "
+                "ticket_reference, conversation_thread_id "
                 "FROM team_conversations WHERE whatsapp_number=? "
                 "ORDER BY timestamp ASC LIMIT ?",
                 (number, limit)
@@ -1965,32 +1978,41 @@ def get_admin_conversation(username: str, limit: int = 50) -> list:
 
 # ── Donna notifications (web UI notification panel) ───────────────────────────
 
-def add_notification(title: str, body: str, category: str = 'info'):
-    """Store a notification for display in the web UI."""
+def add_notification(title: str, body: str, category: str = 'info', username: str = 'system'):
+    """Store a notification. username='system' means all users see it."""
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO donna_notifications (title, body, category) VALUES (?,?,?)",
-            (title, body, category)
+            "INSERT INTO donna_notifications (title, body, category, username) VALUES (?,?,?,?)",
+            (title, body, category, username)
         )
 
 
-def get_notifications(limit: int = 20, unread_only: bool = False) -> list:
-    """Return recent notifications."""
+def get_notifications(limit: int = 20, unread_only: bool = False, username: str = None) -> list:
+    """Return notifications visible to this user (their own + system-wide)."""
     with _conn() as conn:
-        q = ("SELECT id, title, body, category, read, "
-             "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp "
-             "FROM donna_notifications")
-        if unread_only:
-            q += " WHERE read=0"
-        q += " ORDER BY timestamp DESC LIMIT ?"
-        rows = conn.execute(q, (limit,)).fetchall()
+        base = ("SELECT id, title, body, category, read, username, "
+                "strftime('%Y-%m-%d %H:%M:%S', datetime(timestamp, '+3 hours')) as timestamp "
+                "FROM donna_notifications")
+        if username:
+            cond = " WHERE (username=? OR username='system')"
+            if unread_only:
+                cond += " AND read=0"
+            q = base + cond + " ORDER BY timestamp DESC LIMIT ?"
+            args = (username, limit)
+        else:
+            q = base + (" WHERE read=0" if unread_only else "") + " ORDER BY timestamp DESC LIMIT ?"
+            args = (limit,)
+        rows = conn.execute(q, args).fetchall()
     return [dict(r) for r in rows]
 
 
-def mark_notifications_read():
-    """Mark all notifications as read."""
+def mark_notifications_read(username: str = None):
+    """Mark notifications as read — scoped to user if provided."""
     with _conn() as conn:
-        conn.execute("UPDATE donna_notifications SET read=1 WHERE read=0")
+        if username:
+            conn.execute("UPDATE donna_notifications SET read=1 WHERE read=0 AND (username=? OR username='system')", (username,))
+        else:
+            conn.execute("UPDATE donna_notifications SET read=1 WHERE read=0")
 
 
 def delete_notification(notif_id: int):
@@ -2081,6 +2103,30 @@ def list_user_integrations(username: str) -> list:
             (username,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── User preferences ─────────────────────────────────────────────────────────
+
+def get_user_preferences(username: str) -> dict:
+    """Return user preferences dict (creates row if absent)."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_preferences WHERE username=?", (username,)
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def set_user_preferences(username: str, persona_instructions: str) -> None:
+    """Upsert user preferences."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO user_preferences (username, persona_instructions, updated_at)
+               VALUES (?, ?, datetime('now', '+3 hours'))
+               ON CONFLICT(username) DO UPDATE SET
+                   persona_instructions=excluded.persona_instructions,
+                   updated_at=excluded.updated_at""",
+            (username, persona_instructions)
+        )
 
 
 def add_reminder(created_by: str, target_name: str, reminder_text: str,

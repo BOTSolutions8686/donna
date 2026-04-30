@@ -68,6 +68,18 @@ def _creds(username: str = None):
     # Try per-user credentials first
     if username:
         row = _db.get_user_integration(username, "gmail")
+        if not row:
+            # Fallback: search by email_address field (handles mismatch between
+            # donna_users username and the Gmail account used to connect)
+            try:
+                all_int = _db.list_all_user_integrations('gmail')
+                for _i in all_int:
+                    if (_i.get('email_address', '').lower() == username.lower() or
+                            _i.get('username', '').lower() == username.lower()):
+                        row = _i
+                        break
+            except Exception:
+                pass
         if row:
             data = _json.loads(row["token_json"])
             creds = Credentials(

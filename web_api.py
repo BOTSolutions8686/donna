@@ -1128,14 +1128,16 @@ async def log_admin_message_api(request: Request, session=Depends(require_auth))
 @app.get("/api/notifications")
 async def get_notifications_api(unread: str = "0", session=Depends(require_auth)):
     unread_only = unread == "1"
-    notifs = db.get_notifications(limit=20, unread_only=unread_only)
+    _uname = session.get("username") if isinstance(session, dict) else None
+    notifs = db.get_notifications(limit=30, unread_only=unread_only, username=_uname)
     unread_count = sum(1 for n in notifs if not n["read"])
     return JSONResponse({"notifications": notifs, "unread": unread_count})
 
 
 @app.post("/api/notifications/read")
 async def mark_notifications_read_api(session=Depends(require_auth)):
-    db.mark_notifications_read()
+    _uname = session.get("username") if isinstance(session, dict) else None
+    db.mark_notifications_read(username=_uname)
     return JSONResponse({"ok": True})
 
 
@@ -1875,6 +1877,26 @@ async def create_ticket_from_chat(body: TicketCreateBody, session=Depends(requir
         return {"ok": True, "ticket_name": ticket_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── User preferences ──────────────────────────────────────────────────────────
+
+class UserPrefsBody(BaseModel):
+    persona_instructions: str = ""
+
+@app.get("/api/preferences")
+async def get_preferences(session=Depends(require_auth)):
+    """Get current user's personal Donna preferences."""
+    username = session.get("username", "") if isinstance(session, dict) else ""
+    prefs = db.get_user_preferences(username)
+    return {"persona_instructions": prefs.get("persona_instructions", "")}
+
+@app.put("/api/preferences")
+async def save_preferences(body: UserPrefsBody, session=Depends(require_auth)):
+    """Save current user's personal Donna preferences."""
+    username = session.get("username", "") if isinstance(session, dict) else ""
+    db.set_user_preferences(username, body.persona_instructions)
+    return {"ok": True}
 
 
 # ── Reminders ─────────────────────────────────────────────────────────────────

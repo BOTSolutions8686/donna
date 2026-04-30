@@ -222,6 +222,7 @@ const TOOLS=[
     {id:'my_email',     label:'My Email Inbox'},
     {id:'calendar',     label:'Calendar'},
     {id:'reminders',    label:'Reminders'},
+    {id:'preferences',  label:'My Settings'},
     {id:'eod_reports',  label:'EOD Reports', managerOnly:true},
   ]},
   {section:'System',adminOnly:true,items:[
@@ -1297,6 +1298,112 @@ function EODPanel({onClose,loggedIn}){
   </div>;
 }
 
+
+function PreferencesPanel({onClose,loggedIn}){
+  const [text,setText]=React.useState('');
+  const [saved,setSaved]=React.useState(false);
+  const [loading,setLoading]=React.useState(true);
+
+  React.useEffect(()=>{
+    authFetch('/api/preferences').then(d=>{
+      if(d){setText(d.persona_instructions||'');setLoading(false);}
+    }).catch(()=>setLoading(false));
+  },[]);
+
+  const save=async()=>{
+    await authFetch('/api/preferences',{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({persona_instructions:text}),
+    }).catch(()=>null);
+    setSaved(true);
+    setTimeout(()=>setSaved(false),2500);
+  };
+
+  const EXAMPLES=[
+    'Always reply in Arabic unless I write in English.',
+    'Keep responses very short — bullet points only.',
+    'Address me as Haider, not by full name.',
+    'When I ask about tickets, always show the ticket number first.',
+    'For email drafts, use formal Saudi business tone.',
+  ];
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:460,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  return <div style={panelStyle}>
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',flexShrink:0,
+      display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div>
+        <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)'}}>My Donna Settings</div>
+        <div style={{fontSize:11,color:'var(--text-3)'}}>Personal instructions that apply only to you</div>
+      </div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>✕</button>
+    </div>
+
+    <div style={{flex:1,overflowY:'auto',padding:'20px'}}>
+      {loading
+        ? <div style={{color:'var(--text-3)',fontSize:12}}>Loading…</div>
+        : <>
+          <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.7,marginBottom:16}}>
+            Write any instructions you want Donna to always follow when talking to you.
+            These are private — only you and Donna see them.
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:'var(--text-3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6}}>Examples</div>
+            <div style={{display:'flex',flexDirection:'column',gap:5}}>
+              {EXAMPLES.map(e=>(
+                <button key={e} onClick={()=>setText(t=>t?(t+'
+'+e):e)}
+                  style={{background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:6,
+                    padding:'6px 10px',fontSize:11,color:'var(--text-2)',cursor:'pointer',
+                    textAlign:'left',transition:'border-color 0.15s'}}
+                  onMouseEnter={ev=>ev.currentTarget.style.borderColor='var(--teal)'}
+                  onMouseLeave={ev=>ev.currentTarget.style.borderColor='var(--border)'}>
+                  + {e}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:'var(--text-3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:6}}>Your instructions</div>
+            <textarea
+              value={text}
+              onChange={e=>setText(e.target.value)}
+              placeholder="Write your personal instructions here…&#10;Each line is a separate rule."
+              rows={8}
+              style={{width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,
+                padding:'10px 12px',color:'var(--text-1)',fontSize:13,resize:'vertical',
+                outline:'none',lineHeight:1.6,fontFamily:'var(--sans)',boxSizing:'border-box',
+                transition:'border-color 0.15s'}}
+              onFocus={e=>e.target.style.borderColor='var(--teal)'}
+              onBlur={e=>e.target.style.borderColor='var(--border)'}/>
+            {text&&<div style={{fontSize:10,color:'var(--text-3)',marginTop:4}}>{text.split('\n').filter(Boolean).length} instruction(s)</div>}
+          </div>
+
+          {text&&<div style={{background:'var(--teal-dim)',border:'1px solid var(--teal)',borderRadius:8,padding:'10px 12px',marginBottom:16}}>
+            <div style={{fontSize:10,color:'var(--teal)',fontWeight:600,marginBottom:4}}>PREVIEW — Donna will see this:</div>
+            <div style={{fontSize:11,color:'var(--text-2)',lineHeight:1.6,whiteSpace:'pre-wrap'}}>{text}</div>
+          </div>}
+
+          <button onClick={save} style={{width:'100%',background:'var(--teal)',color:'#000',
+            border:'none',borderRadius:8,padding:'10px',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+            {saved?'✓ Saved!':'Save Instructions'}
+          </button>
+
+          {text&&<button onClick={()=>{setText('');save();}} style={{width:'100%',marginTop:8,
+            background:'none',border:'1px solid var(--border)',borderRadius:8,padding:'8px',
+            fontSize:12,color:'var(--text-3)',cursor:'pointer'}}>
+            Clear all instructions
+          </button>}
+        </>
+      }
+    </div>
+  </div>;
+}
+
 function RemindersPanel({onClose,loggedIn}){
   const [reminders,setReminders]=React.useState(null);
   const [filter,setFilter]=React.useState('pending');
@@ -2276,6 +2383,7 @@ function App(){
   const [showGmailConnect,setShowGmailConnect]=useState(false);
   const [showCalendar,setShowCalendar]=useState(false);
   const [showReminders,setShowReminders]=useState(false);
+  const [showPreferences,setShowPreferences]=useState(false);
   const [showEOD,setShowEOD]=useState(false);
   const [ticketDraft,setTicketDraft]=useState(null); // {phone,text}
   const [editingContact,setEditingContact]=useState(null);
@@ -2641,6 +2749,7 @@ function App(){
     if(toolId==='my_email'){setShowEmailInbox(true);setToolsOpen(false);return;}
     if(toolId==='calendar'){setShowCalendar(true);setToolsOpen(false);return;}
     if(toolId==='reminders'){setShowReminders(true);setToolsOpen(false);return;}
+    if(toolId==='preferences'){setShowPreferences(true);setToolsOpen(false);return;}
     if(toolId==='eod_reports'){setShowEOD(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
@@ -2799,6 +2908,11 @@ function App(){
             <div className="header-user-pill" style={{display:'flex',alignItems:'center',gap:7,padding:'5px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:8,flexShrink:0}}>
               <div style={{width:22,height:22,borderRadius:'50%',background:'var(--teal-dim)',border:'1px solid var(--teal)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,color:'var(--teal)'}}>{loggedIn.initials}</div>
               <div style={{fontSize:11,fontWeight:600,color:'var(--text-1)'}}>{loggedIn.name}</div>
+              <button onClick={()=>setShowPreferences(true)} title="My Donna Settings"
+                style={{background:'none',border:'none',color:'var(--text-3)',cursor:'pointer',
+                  padding:'0 2px',fontSize:13,lineHeight:1,opacity:0.6}}
+                onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                onMouseLeave={e=>e.currentTarget.style.opacity=0.6}>⚙</button>
             </div>
           </div>
 
@@ -2955,6 +3069,7 @@ function App(){
   {showEmailInbox&&<EmailInboxPanel onClose={()=>setShowEmailInbox(false)} loggedIn={loggedIn}/>}
   {showCalendar&&<CalendarPanel onClose={()=>setShowCalendar(false)}/>}
   {showReminders&&<RemindersPanel onClose={()=>setShowReminders(false)} loggedIn={loggedIn}/>}
+  {showPreferences&&<PreferencesPanel onClose={()=>setShowPreferences(false)} loggedIn={loggedIn}/>}
   {showEOD&&<EODPanel onClose={()=>setShowEOD(false)} loggedIn={loggedIn}/>}
   {ticketDraft&&<TicketDraftPanel phone={ticketDraft.phone} initialText={ticketDraft.text} onClose={()=>setTicketDraft(null)}/>}
   {isCustomerThread&&coachingOpen[activeThread]&&<CoachingPanel
