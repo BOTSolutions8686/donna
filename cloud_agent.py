@@ -70,7 +70,10 @@ async def process_admin_query(question: str) -> str:
     intelligence to the Telegram admin interface.
     """
     try:
-        return await ask_claude(question, channel="shortcut", sender_name="Talha")
+        import google_client as _gc_sc
+        _sc_username = _gc_sc._resolve_google_username('Talha')
+        return await ask_claude(question, channel="shortcut", sender_name="Talha",
+                                sender_username=_sc_username)
     except Exception as e:
         log.error("process_admin_query error: %s", e)
         return f"Error processing your question: {str(e)[:80]}"
@@ -1201,7 +1204,8 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
     try:
         _tool_failure_counts[name] = 0  # reset on successful entry
         # Resolve actual DB username for Google credential lookup
-        _google_user = sender_username or sender_name
+        import google_client as _gcl_mod
+        _google_user = sender_username or _gcl_mod._resolve_google_username(sender_name)
         if name == "get_overdue_invoices":
             items = erp.get_overdue_invoices()
             if not items:
@@ -1816,9 +1820,13 @@ async def _execute_tool(name, inputs, bot=None, chat_id=None, sender_name='Talha
                     else:
                         return f"Failed to reach {recipient_name}. Check server logs."
                 else:
-                    erp.send_whatsapp(to, message)
+                    _ws_result = wa_send_safe(to, message)
                     db.log_communication("whatsapp", recipient_name, to,
-                                         message_preview=message, status="sent")
+                                         message_preview=message, status=_ws_result)
+                    if _ws_result == 'template_sent':
+                        return f"WhatsApp session was closed for {recipient_name} — sent a template to re-open. Message queued."
+                    elif _ws_result == 'failed':
+                        return f"WhatsApp delivery failed for {recipient_name}. Check server logs."
                     return f"WhatsApp sent to {recipient_name} ({to})."
             except Exception as exc:
                 db.log_communication("whatsapp", recipient_name, to,
@@ -3631,7 +3639,7 @@ async def job_eod_summary(app):
     if recipients:
         for wa_num in recipients:
             try:
-                erp.send_whatsapp(wa_num, digest[:1500])
+                wa_send_safe(wa_num, digest[:1500])
                 log.info('EOD digest sent to %s — %d reports', wa_num, len(reports))
             except Exception as e:
                 log.error('EOD digest send failed to %s: %s', wa_num, e)
@@ -3934,7 +3942,7 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
         )
         if agent_wa:
             try:
-                erp.send_whatsapp(agent_wa,
+                wa_send_safe(agent_wa,
                     'Customer %s (%s) replied:\n\n%s' % (customer_name, sender_number, content[:300]))
             except Exception as e:
                 log.warning('Failed to notify agent about customer reply: %s', e)
@@ -4318,7 +4326,7 @@ async def _send_claim_handoff_summary(agent_username: str, phone: str):
         if _wapi._send_whatsapp_fn:
             await _wapi._send_whatsapp_fn(_agent_wa, msg)
         else:
-            erp.send_whatsapp(_agent_wa, msg)
+            wa_send_safe(_agent_wa, msg)
         log.info("Handoff summary sent to %s for customer %s", agent_username, phone)
     except Exception as _hs_err:
         log.warning("Failed to send handoff summary: %s", _hs_err)
@@ -4366,7 +4374,7 @@ async def trigger_escalation(phone_number: str, customer_name: str, reason: str,
     # Notify assigned team member via WhatsApp if different from admin
     if assigned_to and assigned_to != _ADMIN_NUMBER:
         try:
-            erp.send_whatsapp(assigned_to, alert_text)
+            wa_send_safe(assigned_to, alert_text)
         except Exception as e:
             log.warning('Escalation WA notify failed: %s', e)
 
@@ -4790,7 +4798,7 @@ async def job_check_reminders(app):
             # WhatsApp to target
             if _target_wa:
                 try:
-                    erp.send_whatsapp(_target_wa, text)
+                    wa_send_safe(_target_wa, text)
                 except Exception as _we:
                     log.warning("Reminder WA failed for %s: %s", _target_wa, _we)
             else:
@@ -4826,7 +4834,7 @@ async def job_check_reminders(app):
                         pass
                 if _setter_wa:
                     try:
-                        erp.send_whatsapp(
+                        wa_send_safe(
                             _setter_wa,
                             f"\u2705 Reminder sent to {rem['target_name']}: {rem['reminder_text']}"
                         )
@@ -5019,8 +5027,8 @@ async def job_whatsapp_inbound_poll(app):
                 try:
                     reply = await ask_claude_team_conversational(sender_number, sender_name, content_raw)
                     if reply:
-                        result = erp.send_whatsapp(sender_number, reply)
-                        sent_name = result.get('name') if isinstance(result, dict) else None
+                        _poll_res = wa_send_safe(sender_number, reply)
+                        sent_name = None  # wa_send_safe handles logging internally
                         db.log_team_conversation(
                             sender_name, sender_number, 'outbound', reply,
                             sent_wa_message_name=sent_name, delivery_status='sent'
@@ -6026,7 +6034,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         log.info("In: %s", str(msg_to_claude)[:150])
-        reply = await ask_claude(msg_to_claude, bot=context.bot, chat_id=update.effective_chat.id)
+        import google_client as _gc_tg
+        _tg_username = _gc_tg._resolve_google_username('Talha')
+        reply = await ask_claude(msg_to_claude, bot=context.bot,
+                                  chat_id=update.effective_chat.id,
+                                  sender_username=_tg_username)
         await _send(update, reply)
     except anthropic.RateLimitError:
         log.error("Rate limit hit in handle_message")
@@ -6069,7 +6081,7 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
             media_url = message[len("__AUDIO__:"):]
             api_key = CONFIG.get("openai", {}).get("api_key", "")
             if not api_key:
-                erp.send_whatsapp(sender, "Voice notes need an OpenAI API key configured on my server.")
+                wa_send_safe(sender, "Voice notes need an OpenAI API key configured on my server.")
                 return
             log.info("WhatsApp voice note from %s — downloading %s", sender_name, media_url[:60])
             audio_bytes = erp.download_whatsapp_media(media_url)
@@ -6093,12 +6105,15 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
                 f"{message}"
             )
             effective_chat_id = sender_telegram_id or _telegram_talha_chat_id
+            import google_client as _gc_wa
+            _wa_username = _gc_wa._resolve_google_username(sender_name)
             reply = await ask_claude(
                 context_message,
                 bot=_telegram_bot if sender_telegram_id else None,
                 chat_id=effective_chat_id if sender_telegram_id else None,
                 channel=channel,
                 sender_name=sender_name,
+                sender_username=_wa_username,
             )
         else:
             # Team member — conversational AI mode
@@ -6129,8 +6144,8 @@ async def _process_whatsapp_message(sender: str, sender_name: str, message: str)
             reply = await ask_claude_team_conversational(sender, sender_name, message)
 
         if reply:
-            result = erp.send_whatsapp(sender, reply)
-            sent_name = result.get('name') if isinstance(result, dict) else None
+            _wh_res = wa_send_safe(sender, reply)
+            sent_name = None  # wa_send_safe handles logging internally
             db.log_communication(
                 "whatsapp_reply", sender_name, sender,
                 message_preview=reply, status="sent",
@@ -6164,7 +6179,7 @@ def _notify_admin(title: str, body: str, tag: str = 'donna', url: str = '/', urg
     # WhatsApp for urgent/critical alerts only
     if urgent and admin_wa:
         try:
-            erp.send_whatsapp(admin_wa, f"{title}\n{body}")
+            wa_send_safe(admin_wa, f"{title}\n{body}")
         except Exception as _nwe:
             log.debug('_notify_admin WA failed: %s', _nwe)
 

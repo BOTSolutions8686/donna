@@ -26,6 +26,29 @@ SCOPES = [
 ]
 
 
+def _resolve_google_username(name_or_username: str) -> str:
+    """Resolve a display name (e.g. Talha) to the actual DB username (talha@botsolutions.tech).
+    Falls back to the input unchanged if no match found."""
+    if not name_or_username:
+        return name_or_username
+    # Already an email address — use as-is
+    if "@" in name_or_username:
+        return name_or_username
+    # Look up donna_users by display_name prefix match
+    try:
+        import database as _db2
+        users = _db2.list_donna_users()
+        name_lower = name_or_username.lower()
+        for u in users:
+            dn = (u.get("display_name") or "").split()[0].lower()
+            if dn == name_lower:
+                return u["username"]
+    except Exception:
+        pass
+    return name_or_username
+
+
+
 # ── Credentials ───────────────────────────────────────────────────────────────
 
 def _creds(username: str = None):
