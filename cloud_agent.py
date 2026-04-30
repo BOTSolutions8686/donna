@@ -4589,7 +4589,9 @@ def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = N
     # Get or create thread ID for this conversation
     thread_id = db.get_or_create_thread_id(to, ticket_id) if ticket_id else None
 
-    if db.whatsapp_window_open(to):
+    window_open = db.whatsapp_window_open(to)
+    log.debug('wa_send_safe: %s window_open=%s for %s', member_name, window_open, to)
+    if window_open:
         result = erp.send_whatsapp(to, message)
         sent_name = result.get('name') if isinstance(result, dict) else None
         db.update_wa_window(to, 'outbound')
@@ -4606,7 +4608,7 @@ def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = N
         return "delivered"
     else:
         # Window closed — pick best template based on use_case
-        log.info("WA 24h window closed for %s — sending template", member_name)
+        log.warning("WA 24h window closed for %s (%s) — sending template %s", member_name, to, CHAT_START_TEMPLATE)
         # Select template: if use_case provided try to find specific one, else use session opener
         template_doc = CHAT_START_TEMPLATE
         if use_case:
@@ -4632,7 +4634,9 @@ def wa_send_safe(to: str, message: str, ticket_id: str = None, use_case: str = N
                 thread_id=thread_id
             )
         except Exception as e:
-            log.error("Failed to send template %s to %s: %s", template_doc, to, e)
+            log.error("Failed to send template %s to %s: %s — WA unreachable, push-only fallback", template_doc, to, e)
+            # Still queue the message so it fires when window opens naturally
+            db.set_pending_state(to, "queued_message", "", context=message[:500])
             return "failed"
         # Queue the actual message to send when they reply
         db.set_pending_state(to, "queued_message", "", context=message[:500])
@@ -4847,7 +4851,8 @@ async def job_check_reminders(app):
             # WhatsApp to target
             if _target_wa:
                 try:
-                    wa_send_safe(_target_wa, text)
+                    _wa_result = wa_send_safe(_target_wa, text)
+                    log.info('Reminder #%d WA result: %s → %s', rem['id'], _target_wa, _wa_result)
                 except Exception as _we:
                     log.warning("Reminder WA failed for %s: %s", _target_wa, _we)
             else:
@@ -6503,95 +6508,118 @@ def main():
         scheduler.add_job(
             lambda: _run(lambda: job_zatca_check(app)),
             "interval", minutes=30, id="zatca_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_daily_summary(app)),
             "cron", hour=9, minute=0, id="daily_summary",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_gl_snapshot(app)),
             "cron", hour=0, minute=5, id="gl_snapshot",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_collections_escalation(app)),
             "cron", day_of_week="mon", hour=8, minute=0, id="collections_escalation",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_suggestions_digest(app)),
             "cron", day_of_week="mon", hour=8, minute=15, id="suggestions_digest",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_monthly_pl_digest(app)),
             "cron", day=1, hour=9, minute=0, id="monthly_pl_digest",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_health_check(app)),
             "cron", hour=6, minute=0, id="health_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(job_refresh_coa),
             "cron", day_of_week="sun", hour=23, minute=0, id="refresh_coa",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_team_reminders(app)),
             "cron", hour=9, minute=30, id="team_reminders",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_team_accountability_report(app)),
             "cron", day_of_week="mon", hour=8, minute=30, id="team_accountability",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_whatsapp_inbound_poll(app)),
             "interval", minutes=5, id="whatsapp_inbound_poll",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_email_check(app)),
             "interval", minutes=30, id="email_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_sla_check(app)),
             "cron", hour=8, minute=45, id="sla_check_morning",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_sla_check(app)),
             "cron", hour=17, minute=0, id="sla_check_evening",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_old_tickets_digest(app)),
             "cron", day_of_week="mon", hour=9, minute=0, id="old_tickets_digest",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_morning_team_briefing(app)),
             "cron", hour=8, minute=30, id="morning_team_briefing",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_delivery_check(app)),
             "interval", minutes=10, id="delivery_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_escalation_check(app)),
             "interval", minutes=5, id="escalation_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_check_reminders(app)),
             "interval", minutes=1, id="reminder_check",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_takeover_expiry(app)),
             "interval", minutes=30, id="takeover_expiry",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_eod_report_request(app)),
             "cron", hour=16, minute=30, id="eod_report_request",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_eod_summary(app)),
             "cron", hour=16, minute=55, id="eod_summary",
+            replace_existing=True,
         )
         scheduler.add_job(
             lambda: _run(lambda: job_enrich_contacts_from_erp(app)),
             "cron", hour=2, minute=0, id="erp_contact_sync",
             timezone="Asia/Riyadh",
+            replace_existing=True,
         )
         # ── Donna web dashboard ──────────────────────────────────────────────────
         web_api.set_ask_claude(ask_claude)
