@@ -1514,8 +1514,27 @@ async def oauth_google_save(body: dict, session=Depends(require_auth)):
     email_addr = body.get("email", "")
     if not token_json:
         raise HTTPException(status_code=400, detail="token required")
+    scopes = " ".join(_GOOGLE_SCOPES)
+    # Save under session username
     db.save_user_integration(username, "gmail", token_json,
-                             email_address=email_addr, scopes=" ".join(_GOOGLE_SCOPES))
+                             email_address=email_addr, scopes=scopes)
+    # Also save under any other donna_users entries sharing the same display_name
+    # so users with two accounts (e.g. work + personal login) can access from either
+    try:
+        import google_client as _gc_save
+        all_users = db.list_donna_users()
+        session_display = _display_name_for(username).lower()
+        for u in all_users:
+            other_un = u["username"]
+            if other_un == username:
+                continue
+            # Same display name = same person with a different login
+            if (u.get("display_name") or "").split()[0].lower() == session_display:
+                db.save_user_integration(other_un, "gmail", token_json,
+                                         email_address=email_addr, scopes=scopes)
+                _log.info("OAuth: cross-linked token to %s (same user as %s)", other_un, username)
+    except Exception as _cle:
+        _log.debug("OAuth cross-link error: %s", _cle)
     return {"ok": True, "email": email_addr}
 
 @app.delete("/api/oauth/google")
