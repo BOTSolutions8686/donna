@@ -1898,6 +1898,49 @@ async def create_ticket_from_chat(body: TicketCreateBody, session=Depends(requir
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Company Knowledge Base ────────────────────────────────────────────────────
+
+class KnowledgeSectionBody(BaseModel):
+    section: str
+    content: str
+    sort_order: int = 0
+    is_active: int = 1
+
+@app.get("/api/knowledge")
+async def get_knowledge(session=Depends(require_auth)):
+    """Return all knowledge base sections."""
+    return {"sections": db.get_knowledge_base(active_only=False)}
+
+@app.post("/api/knowledge")
+async def create_knowledge(body: KnowledgeSectionBody, session=Depends(require_auth)):
+    """Create a new knowledge section."""
+    _check_permission(session, "manage_settings")
+    username = session.get("username", "system") if isinstance(session, dict) else "system"
+    kid = db.upsert_knowledge_section(body.section, body.content,
+                                       updated_by=username, sort_order=body.sort_order)
+    return {"ok": True, "id": kid}
+
+@app.put("/api/knowledge/{kb_id}")
+async def update_knowledge(kb_id: int, body: KnowledgeSectionBody, session=Depends(require_auth)):
+    """Update a knowledge section."""
+    _check_permission(session, "manage_settings")
+    username = session.get("username", "system") if isinstance(session, dict) else "system"
+    db.upsert_knowledge_section(body.section, body.content,
+                                 updated_by=username, sort_order=body.sort_order, kb_id=kb_id)
+    if body.is_active == 0:
+        db.toggle_knowledge_section(kb_id, False)
+    else:
+        db.toggle_knowledge_section(kb_id, True)
+    return {"ok": True}
+
+@app.delete("/api/knowledge/{kb_id}")
+async def delete_knowledge(kb_id: int, session=Depends(require_auth)):
+    """Delete a knowledge section."""
+    _check_permission(session, "manage_settings")
+    db.delete_knowledge_section(kb_id)
+    return {"ok": True}
+
+
 # ── User preferences ──────────────────────────────────────────────────────────
 
 class UserPrefsBody(BaseModel):

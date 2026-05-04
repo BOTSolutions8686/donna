@@ -85,6 +85,16 @@ def init_db():
                 error               TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS company_knowledge (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                section     TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                is_active   INTEGER DEFAULT 1,
+                sort_order  INTEGER DEFAULT 0,
+                updated_at  TEXT DEFAULT (datetime('now', '+3 hours')),
+                updated_by  TEXT DEFAULT 'system'
+            );
+
             CREATE TABLE IF NOT EXISTS user_preferences (
                 username          TEXT PRIMARY KEY,
                 persona_instructions TEXT DEFAULT '',
@@ -1488,8 +1498,14 @@ def count_customer_messages_last_hour(phone_number):
 
 
 def create_customer_escalation(phone_number, customer_name, reason, assigned_to=None):
-    """Create escalation record; flag the contact. Returns escalation id."""
+    """Create escalation record; deduped — returns existing id if already pending."""
     with _conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM customer_escalations WHERE phone_number=? AND status='pending' LIMIT 1",
+            (phone_number,)
+        ).fetchone()
+        if existing:
+            return existing[0]  # Return existing id, never create duplicate
         cur = conn.execute(
             "INSERT INTO customer_escalations (phone_number, customer_name, reason, assigned_to) "
             "VALUES (?,?,?,?)",
@@ -2103,6 +2119,52 @@ def list_user_integrations(username: str) -> list:
             (username,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Company knowledge base ────────────────────────────────────────────────────
+
+def get_knowledge_base(active_only: bool = True) -> list:
+    """Return all knowledge base sections, sorted by sort_order."""
+    with _conn() as conn:
+        q = "SELECT * FROM company_knowledge"
+        if active_only:
+            q += " WHERE is_active=1"
+        q += " ORDER BY sort_order ASC, id ASC"
+        rows = conn.execute(q).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_knowledge_section(section: str, content: str, updated_by: str = 'system',
+                              sort_order: int = 0, kb_id: int = None) -> int:
+    """Create or update a knowledge section. Returns the row id."""
+    with _conn() as conn:
+        if kb_id:
+            conn.execute(
+                """UPDATE company_knowledge
+                   SET section=?, content=?, updated_by=?, sort_order=?,
+                       updated_at=datetime('now', '+3 hours')
+                   WHERE id=?""",
+                (section, content, updated_by, sort_order, kb_id)
+            )
+            return kb_id
+        else:
+            cur = conn.execute(
+                """INSERT INTO company_knowledge (section, content, updated_by, sort_order)
+                   VALUES (?,?,?,?)""",
+                (section, content, updated_by, sort_order)
+            )
+            return cur.lastrowid
+
+
+def delete_knowledge_section(kb_id: int):
+    with _conn() as conn:
+        conn.execute("DELETE FROM company_knowledge WHERE id=?", (kb_id,))
+
+
+def toggle_knowledge_section(kb_id: int, active: bool):
+    with _conn() as conn:
+        conn.execute("UPDATE company_knowledge SET is_active=? WHERE id=?",
+                     (1 if active else 0, kb_id))
 
 
 # ── User preferences ─────────────────────────────────────────────────────────

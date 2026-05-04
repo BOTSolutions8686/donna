@@ -4080,8 +4080,32 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
                 'أحتاج إلى عنوان بريدك الإلكتروني لإرسال دعوة الاجتماع.', lang)
             return
 
+    # ── Sales inquiry detection (light escalation — no crisis) ───────────────
+    _SALES_ONLY_KW_EN = ['how much', 'pricing', 'price', 'quote', 'quotation', 'proposal',
+                          'purchase', 'buy', 'sign up', 'license', 'demo', 'trial', 'subscription']
+    _SALES_ONLY_KW_AR = ['سعر', 'الأسعار', 'كم تكلف', 'كم السعر', 'عرض سعر', 'نسخه', 'نسخة',
+                          'ترخيص', 'اشتراك', 'شراء', 'اشتري', 'عرض تجريبي', 'ديمو']
+    _is_sales_inquiry = (any(kw in content.lower() for kw in _SALES_ONLY_KW_EN) or
+                         any(kw in content for kw in _SALES_ONLY_KW_AR))
+
     # ── Immediate escalation check ───────────────────────────────────────────
     do_escalate, esc_keyword = should_escalate_immediately(content)
+    # Pure sales inquiry — give helpful response with contact details, no crisis escalation
+    if _is_sales_inquiry and not do_escalate:
+        sales_reply = (
+            'For pricing, licensing and proposals, please contact our sales team directly:\n\n'
+            '📧 talha@botsolutions.tech\n'
+            '📱 WhatsApp / Call: +966546065347 (Talha)\n\n'
+            'Our team will prepare a tailored proposal for you. What product are you interested in — ERPNext or Yousr.app?'
+            if lang == 'en' else
+            'للاستفسار عن الأسعار والتراخيص والعروض، تواصل مع فريق المبيعات مباشرة:\n\n'
+            '📧 talha@botsolutions.tech\n'
+            '📱 واتساب / اتصال: +966546065347 (طلحة)\n\n'
+            'سيقوم فريقنا بتحضير عرض مناسب لاحتياجاتك. أي منتج يهمك — ERPNext أم Yousr.app؟'
+        )
+        _send_customer_reply(sender_number, customer_name, sales_reply, lang)
+        return
+
     if do_escalate:
         log.info('Immediate escalation triggered for %s: keyword=%s', sender_number, esc_keyword)
         # Meeting keywords → start email collection flow
@@ -4216,7 +4240,25 @@ async def handle_customer_message(sender_number: str, content: str, wa_name: str
         messages_ctx.append({'role': 'user', 'content': content})
 
     # ── Build system prompt with pricing context ───────────────────────────────────
-    system_prompt = _CUSTOMER_SYSTEM_PROMPT
+    # Load knowledge base dynamically (always fresh)
+    try:
+        _kb_sections = db.get_knowledge_base(active_only=True)
+        if _kb_sections:
+            _kb_text = '\n\n'.join(
+                f'## {s["section"]}\n{s["content"]}' for s in _kb_sections
+            )
+            _kb_prompt = (
+                '\n\n===COMPANY KNOWLEDGE BASE (always use this for facts — never hallucinate contact details)===\n'
+                + _kb_text
+                + '\n=== END KNOWLEDGE BASE ==='
+            )
+        else:
+            _kb_prompt = ''
+    except Exception as _kbe:
+        log.warning('Knowledge base load failed: %s', _kbe)
+        _kb_prompt = ''
+
+    system_prompt = _CUSTOMER_SYSTEM_PROMPT + _kb_prompt
     # Contact-type context injection
     _ct = (contact or {}).get('contact_type', 'customer')
     _msg_count = (contact or {}).get('message_count', 0) or 0
@@ -4543,6 +4585,7 @@ async def job_escalation_check(app):
                 'info'
             )
 
+            # Resolve FIRST so it can't be picked up again even if notifications fail
             db.resolve_customer_escalation(esc_id, 'auto_resolved', ticket_created=ticket_name)
             log.info('Auto-ticket %s created for escalation #%d (%s)', ticket_name, esc_id, phone)
 

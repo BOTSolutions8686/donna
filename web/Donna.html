@@ -223,6 +223,7 @@ const TOOLS=[
     {id:'calendar',     label:'Calendar'},
     {id:'reminders',    label:'Reminders'},
     {id:'preferences',  label:'My Settings'},
+    {id:'knowledge',    label:'Knowledge Base', adminOnly:true},
     {id:'eod_reports',  label:'EOD Reports', managerOnly:true},
   ]},
   {section:'System',adminOnly:true,items:[
@@ -1298,6 +1299,164 @@ function EODPanel({onClose,loggedIn}){
   </div>;
 }
 
+
+
+function KnowledgeBasePanel({onClose,loggedIn}){
+  const [sections,setSections]=React.useState(null);
+  const [editing,setEditing]=React.useState(null); // {id?,section,content,sort_order,is_active}
+  const [saving,setSaving]=React.useState(false);
+  const [err,setErr]=React.useState('');
+
+  const load=()=>{
+    setSections(null);
+    authFetch('/api/knowledge').then(d=>{if(d)setSections(d.sections||[]);}).catch(()=>setSections([]));
+  };
+  React.useEffect(load,[]);
+
+  const save=async()=>{
+    if(!editing.section.trim()||!editing.content.trim()){setErr('Section title and content required');return;}
+    setSaving(true);setErr('');
+    const method=editing.id?'PUT':'POST';
+    const url=editing.id?`/api/knowledge/${editing.id}`:'/api/knowledge';
+    const r=await authFetch(url,{
+      method,headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({section:editing.section,content:editing.content,
+        sort_order:editing.sort_order||0,is_active:editing.is_active??1}),
+    }).catch(()=>null);
+    setSaving(false);
+    if(r&&r.ok){setEditing(null);load();}
+    else setErr('Save failed');
+  };
+
+  const del=async(id)=>{
+    if(!window.confirm('Delete this knowledge section?')) return;
+    await authFetch(`/api/knowledge/${id}`,{method:'DELETE'}).catch(()=>null);
+    load();
+  };
+
+  const toggle=async(s)=>{
+    await authFetch(`/api/knowledge/${s.id}`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({section:s.section,content:s.content,
+        sort_order:s.sort_order||0,is_active:s.is_active?0:1}),
+    }).catch(()=>null);
+    load();
+  };
+
+  const panelStyle={position:'fixed',top:0,right:0,bottom:0,width:600,maxWidth:'100vw',
+    background:'var(--bg1)',borderLeft:'1px solid var(--border)',zIndex:400,
+    display:'flex',flexDirection:'column',overflow:'hidden'};
+
+  const inp={width:'100%',background:'var(--bg2)',border:'1px solid var(--border)',
+    borderRadius:6,padding:'7px 10px',color:'var(--text-1)',fontSize:13,
+    outline:'none',boxSizing:'border-box'};
+
+  return <div style={panelStyle}>
+    <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',flexShrink:0,
+      display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div>
+        <div style={{fontSize:14,fontWeight:700,color:'var(--text-1)'}}>🧠 Company Knowledge Base</div>
+        <div style={{fontSize:11,color:'var(--text-3)'}}>
+          Donna reads this before every customer conversation · {sections?sections.length:0} sections
+        </div>
+      </div>
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={()=>setEditing({section:'',content:'',sort_order:(sections||[]).length,is_active:1})}
+          style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,
+            padding:'6px 12px',fontSize:12,fontWeight:700,cursor:'pointer'}}>
+          + Add Section
+        </button>
+        <button onClick={onClose} style={{background:'none',border:'none',
+          color:'var(--text-3)',cursor:'pointer',fontSize:18,padding:4}}>✕</button>
+      </div>
+    </div>
+
+    {editing&&<div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',
+      background:'var(--bg0)',flexShrink:0}}>
+      <div style={{fontSize:12,fontWeight:600,color:'var(--text-1)',marginBottom:10}}>
+        {editing.id?'Edit Section':'New Section'}
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        <input value={editing.section} onChange={e=>setEditing(p=>({...p,section:e.target.value}))}
+          placeholder="Section title (e.g. Contact Information, Product: Yousr.app)"
+          style={{...inp,fontWeight:600}}/>
+        <textarea value={editing.content} onChange={e=>setEditing(p=>({...p,content:e.target.value}))}
+          placeholder="Content — this is what Donna will know and use when talking to customers..."
+          rows={6} style={{...inp,resize:'vertical',lineHeight:1.6}}/>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <input type="number" value={editing.sort_order||0}
+            onChange={e=>setEditing(p=>({...p,sort_order:parseInt(e.target.value)||0}))}
+            style={{...inp,width:70}} placeholder="Order"/>
+          <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>
+            <input type="checkbox" checked={editing.is_active!==0}
+              onChange={e=>setEditing(p=>({...p,is_active:e.target.checked?1:0}))}/>
+            Active
+          </label>
+        </div>
+        {err&&<div style={{color:'var(--red)',fontSize:11}}>{err}</div>}
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <button onClick={()=>{setEditing(null);setErr('');}}
+            style={{background:'none',border:'1px solid var(--border)',borderRadius:6,
+              padding:'6px 14px',fontSize:12,color:'var(--text-2)',cursor:'pointer'}}>Cancel</button>
+          <button onClick={save} disabled={saving}
+            style={{background:'var(--teal)',color:'#000',border:'none',borderRadius:6,
+              padding:'6px 16px',fontSize:12,fontWeight:700,cursor:'pointer',
+              opacity:saving?0.5:1}}>
+            {saving?'Saving…':'Save'}
+          </button>
+        </div>
+      </div>
+    </div>}
+
+    <div style={{flex:1,overflowY:'auto'}}>
+      {sections===null&&<div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>Loading…</div>}
+      {sections!==null&&sections.length===0&&<div style={{padding:40,textAlign:'center',color:'var(--text-3)',fontSize:13}}>
+        No knowledge sections yet. Add one above.
+      </div>}
+      {(sections||[]).map(s=>(
+        <div key={s.id} style={{padding:'14px 20px',borderBottom:'1px solid var(--border)',
+          opacity:s.is_active?1:0.45,transition:'opacity 0.2s'}}>
+          <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <span style={{fontSize:12,fontWeight:700,color:'var(--teal)'}}>{s.section}</span>
+                {!s.is_active&&<span style={{fontSize:10,color:'var(--text-3)',background:'var(--bg3)',
+                  borderRadius:4,padding:'1px 6px'}}>disabled</span>}
+                <span style={{fontSize:10,color:'var(--text-3)',fontFamily:'var(--mono)'}}>#{s.sort_order}</span>
+              </div>
+              <div style={{fontSize:12,color:'var(--text-2)',lineHeight:1.6,whiteSpace:'pre-wrap',
+                maxHeight:120,overflow:'hidden',maskImage:'linear-gradient(to bottom, black 80%, transparent)'}}>
+                {s.content}
+              </div>
+              <div style={{fontSize:10,color:'var(--text-3)',marginTop:4}}>
+                Last updated {(s.updated_at||'').slice(0,16)} by {s.updated_by}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              <button onClick={()=>toggle(s)} title={s.is_active?'Disable':'Enable'}
+                style={{background:'none',border:'1px solid var(--border)',borderRadius:5,
+                  padding:'4px 8px',fontSize:11,cursor:'pointer',
+                  color:s.is_active?'var(--amber)':'var(--teal)'}}>
+                {s.is_active?'Disable':'Enable'}
+              </button>
+              <button onClick={()=>setEditing({...s})}
+                style={{background:'none',border:'1px solid var(--border)',borderRadius:5,
+                  padding:'4px 8px',fontSize:11,cursor:'pointer',color:'var(--text-2)'}}>Edit</button>
+              <button onClick={()=>del(s.id)}
+                style={{background:'none',border:'1px solid var(--border)',borderRadius:5,
+                  padding:'4px 8px',fontSize:11,cursor:'pointer',color:'var(--red)'}}>✕</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+    <div style={{padding:'10px 20px',borderTop:'1px solid var(--border)',flexShrink:0,
+      fontSize:11,color:'var(--text-3)',lineHeight:1.5}}>
+      💡 Donna reads all active sections before every customer conversation.
+      Changes take effect immediately — no restart needed.
+    </div>
+  </div>;
+}
 
 function PreferencesPanel({onClose,loggedIn}){
   const [text,setText]=React.useState('');
@@ -2383,6 +2542,7 @@ function App(){
   const [showCalendar,setShowCalendar]=useState(false);
   const [showReminders,setShowReminders]=useState(false);
   const [showPreferences,setShowPreferences]=useState(false);
+  const [showKnowledge,setShowKnowledge]=useState(false);
   const [showEOD,setShowEOD]=useState(false);
   const [ticketDraft,setTicketDraft]=useState(null); // {phone,text}
   const [editingContact,setEditingContact]=useState(null);
@@ -2749,6 +2909,7 @@ function App(){
     if(toolId==='calendar'){setShowCalendar(true);setToolsOpen(false);return;}
     if(toolId==='reminders'){setShowReminders(true);setToolsOpen(false);return;}
     if(toolId==='preferences'){setShowPreferences(true);setToolsOpen(false);return;}
+    if(toolId==='knowledge'){setShowKnowledge(true);setToolsOpen(false);return;}
     if(toolId==='eod_reports'){setShowEOD(true);setToolsOpen(false);return;}
     setToolsOpen(false);
     if(activeThread!=='donna')setActiveThread('donna');
@@ -3069,6 +3230,7 @@ function App(){
   {showCalendar&&<CalendarPanel onClose={()=>setShowCalendar(false)}/>}
   {showReminders&&<RemindersPanel onClose={()=>setShowReminders(false)} loggedIn={loggedIn}/>}
   {showPreferences&&<PreferencesPanel onClose={()=>setShowPreferences(false)} loggedIn={loggedIn}/>}
+  {showKnowledge&&<KnowledgeBasePanel onClose={()=>setShowKnowledge(false)} loggedIn={loggedIn}/>}
   {showEOD&&<EODPanel onClose={()=>setShowEOD(false)} loggedIn={loggedIn}/>}
   {ticketDraft&&<TicketDraftPanel phone={ticketDraft.phone} initialText={ticketDraft.text} onClose={()=>setTicketDraft(null)}/>}
   {isCustomerThread&&coachingOpen[activeThread]&&<CoachingPanel
